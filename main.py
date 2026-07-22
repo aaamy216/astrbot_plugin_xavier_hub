@@ -107,7 +107,7 @@ def normalize_thoughts(raw, keys=None, aliases=None):
 @register(
     "astrbot_plugin_xavier_hub",
     "XavierHub",
-    "沈星回心声系统（独立后端+前端）+ 手机推送前端",
+    "沈星回心声系统（独立后端+前端）+ 可选手机推送前端",
     "0.3.0",
 )
 class XavierHubPlugin(Star):
@@ -179,10 +179,10 @@ class XavierHubPlugin(Star):
         except Exception:
             self.wakeup_alarms_path = self.base_dir.parent.parent / "plugin_data" / "astrbot_plugin_wakeup" / "wakeup_alarms.json"
 
-        # 配置留空 = 不限用户（别用 `or "1738076005"`，会把 "" 又塞回 QQ 号，企微就被挡掉）
-        _raw_target = self.plugin_cfg.get("target_user_id", "1738076005")
-        if _raw_target is None:
-            self.target_user_id = "1738076005"
+        # 配置留空 = 不限用户（禁止把个人 QQ 写死为默认）
+        _raw_target = self.plugin_cfg.get("target_user_id", "")
+        if _raw_target is None or str(_raw_target).strip() == "":
+            self.target_user_id = ""
         else:
             self.target_user_id = str(_raw_target).strip()
 
@@ -196,11 +196,10 @@ class XavierHubPlugin(Star):
         # 便签通知：复用 wakeup 同款“伪装用户消息”链路
         self._main_loop = None
         self._cqhttp_bot = None
-        self._bot_qq_id = str(self.plugin_cfg.get("bot_qq_id", "3766566264") or "3766566264")
+        self._bot_qq_id = str(self.plugin_cfg.get("bot_qq_id", "") or "").strip()
         self._note_notify_umo = str(
-            self.plugin_cfg.get("note_notify_umo", "沈星回:FriendMessage:1738076005")
-            or "沈星回:FriendMessage:1738076005"
-        )
+            self.plugin_cfg.get("note_notify_umo", "") or ""
+        ).strip()
         self._note_notify_enabled = bool(self.plugin_cfg.get("note_notify_enabled", True))
         # 扩展面板：手机页 + 跨插件数据（phone_push / wakeup 等）。默认关。
         self.ext_panel_enabled = bool(self.plugin_cfg.get("ext_panel_enabled", False))
@@ -579,7 +578,7 @@ class XavierHubPlugin(Star):
             logger.error(f"[XavierHub] save notes failed: {e}")
 
     def _notes_prompt_block(self) -> str:
-        """把枝枝最近贴的便签/字段贴纸塞进 system，让我真的能看见"""
+        """把用户最近贴的便签/字段贴纸塞进 system，让角色能看见"""
         notes = self._load_notes()
         if not notes:
             return ""
@@ -590,7 +589,7 @@ class XavierHubPlugin(Star):
         )[:5]
         if not items:
             return ""
-        lines = ["\n【枝枝贴在你心声上的便签——她写给你看的，不是改你的心声】"]
+        lines = ["\n【有人贴在你心声上的便签——对方写给你看的，不是改你的心声】"]
         for it in items:
             t = (it.get("thoughts") or {}) if isinstance(it.get("thoughts"), dict) else {}
             ts = it.get("updated_at")
@@ -725,7 +724,7 @@ class XavierHubPlugin(Star):
         return self._cqhttp_bot is not None and bool(self._bot_qq_id)
 
     async def _inject_note_as_user_message(self, tid: str, note_text: str, thoughts=None, field: str = ""):
-        """把便签伪装成枝枝发来的私聊，走正常对话链路"""
+        """把便签伪装成用户发来的私聊，走正常对话链路"""
         if not self._note_notify_enabled:
             return
         note_text = str(note_text or "").strip()
@@ -768,7 +767,7 @@ class XavierHubPlugin(Star):
             else:
                 prompt = f"【心声便签】我刚在你心声上贴了一句：{note_text}"
 
-        uid = str(self.target_user_id or "1738076005")
+        uid = str(self.target_user_id or "").strip() or "0"
         try:
             payload = {
                 "post_type": "message",
@@ -781,7 +780,7 @@ class XavierHubPlugin(Star):
                 "font": 0,
                 "sender": {
                     "user_id": int(uid),
-                    "nickname": "闪闪",
+                    "nickname": str(self.plugin_cfg.get("note_notify_nickname", "") or "用户"),
                     "sex": "unknown",
                     "age": 0,
                 },
@@ -974,7 +973,7 @@ class XavierHubPlugin(Star):
 
     def _start_visualizer(self):
         host = str(self.plugin_cfg.get("visualizer_host", "0.0.0.0"))
-        port = int(self.plugin_cfg.get("visualizer_port", 1016) or 1016)
+        port = int(self.plugin_cfg.get("visualizer_port", 8765) or 8765)
         base_dir = self.base_dir
         data_dir = getattr(self, "data_dir", self.base_dir)
         thoughts_state_path = self.thoughts_state_path
@@ -1094,7 +1093,7 @@ class XavierHubPlugin(Star):
                         _ff_payload = load_field_favorites_payload()
                         data["field_favorites"] = _ff_payload.get("fields") or {}
                         data["field_sentences"] = _ff_payload.get("sentences") or []
-                        # 枝枝的便签 map：id -> {text, fields, updated_at}
+                        # 用户便签 map：id -> {text, fields, updated_at}
                         notes_map = load_notes() or {}
                         slim_notes = {}
                         for nid, nv in notes_map.items():
@@ -1609,7 +1608,7 @@ class XavierHubPlugin(Star):
                                 "thoughts": thoughts_norm or (cur_note.get("thoughts") if isinstance(cur_note.get("thoughts"), dict) else {}),
                             }
                         save_notes(notes)
-                        # 伪装成枝枝发来的私聊，让小回立刻看见
+                        # 伪装成用户私聊，让角色立刻看见
                         try:
                             notify_note_posted(tid, text_note, notes[tid].get("thoughts") or {}, field=field)
                         except Exception as _ne:
@@ -1657,7 +1656,7 @@ class XavierHubPlugin(Star):
             f"phone_state 文件: {'✓' if self.phone_state_path.exists() else '✗'} ({self.phone_state_path.name})",
             f"目标用户: {self.target_user_id or '不限'}",
             f"会话白名单: {wl_status}",
-            f"可视化前端: http://127.0.0.1:{self.plugin_cfg.get('visualizer_port', 1016)}",
+            f"可视化前端: http://127.0.0.1:{self.plugin_cfg.get('visualizer_port', 8765)}",
         ]
         yield event.plain_result("\n".join(lines))
 
@@ -1671,7 +1670,7 @@ class XavierHubPlugin(Star):
 
     @filter.command("xavier_notes")
     async def xavier_notes_cmd(self, event: AstrMessageEvent):
-        """查看枝枝贴在心声上的便签"""
+        """查看贴在心声上的便签"""
         notes = self._load_notes()
         if not notes:
             yield event.plain_result("还没有便签")
