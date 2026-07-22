@@ -217,7 +217,7 @@ body.glass .page-header h1{color:#7e6e98}
 .tc-head{justify-content:flex-start}
 .tc-head .fav-heart{margin-left:auto}
 
-/* ===== NOTE (枝枝写给我的便签) ===== */
+/* ===== NOTE (用户便签) ===== */
 .note-btn{
   border:none;background:transparent;cursor:pointer;
   font-size:13px;line-height:1;padding:2px 4px;border-radius:8px;
@@ -1654,7 +1654,7 @@ async function loadThoughts(){
       if(moodSlot){moodSlot.innerHTML=moodChip((t[MOOD_KEY]||t['情绪']||'').trim(), curId); bindStickerTargets(moodSlot, curId)}
       let html=''
       if(!any){
-        html=`<div class="empty"><div class="e-icon">💭</div><div class="e-msg">暂无心声</div><div class="e-hint">等枝枝来找我就有啦</div></div>`
+        html=`<div class="empty"><div class="e-icon">💭</div><div class="e-msg">暂无心声</div><div class="e-hint">等对话产生后就会出现啦</div></div>`
       }else{
         const grid=CARD_KEYS.map(k=>{
           const m=T[k],v=(t[k]||'').trim(),mt=!v
