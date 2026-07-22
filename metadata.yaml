@@ -1,8 +1,8 @@
 name: Xavier_Hub
 display_name: Xavier hub
-desc: 沈星回心声系统（独立后端+前端）+ 手机推送前端。支持会话白名单、IP/端口可视化配置
-help: /xavier_thoughts 查看心声；/xavier_hub_health 健康检查；前端默认 http://127.0.0.1:1016
-version: "0.3.0"
-author: Xavier & DD
+desc: 沈星回心声系统（独立后端+前端）+ 可选手机推送前端。支持会话白名单、可配置可视化端口
+help: /xavier_thoughts 查看心声；/xavier_hub_health 健康检查；前端端口见 visualizer_port（默认 8765）
+version: "0.3.1"
+author: Xavier
 repo: "https://github.com/aaamy216/astrbot_plugin_xavier_hub"
 priority: 6
