@@ -1,0 +1,89 @@
+{
+  "visualizer_host": {
+    "description": "前端服务监听地址",
+    "type": "string",
+    "default": "0.0.0.0",
+    "hint": "0.0.0.0 允许外网访问，127.0.0.1 仅本地访问",
+    "obvious_hint": true
+  },
+  "visualizer_port": {
+    "description": "前端服务端口",
+    "type": "int",
+    "default": 1016,
+    "hint": "修改后需要重启插件生效"
+  },
+  "target_user_id": {
+    "description": "目标用户QQ号（仅对该用户启用心声注入/提取）",
+    "type": "string",
+    "default": "1738076005",
+    "hint": "留空则对所有用户生效"
+  },
+  "visualizer_enabled": {
+    "description": "启用心声前端可视化服务",
+    "type": "bool",
+    "default": true
+  },
+  "ext_panel_enabled": {
+    "description": "启用扩展面板（手机页/跨插件数据）",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时：不显示「手机」页，也不读取手机推送/闹钟等其他插件数据。开启后才注入跨插件内容。默认关闭。",
+    "obvious_hint": true
+  },
+  "phone_push_dir": {
+    "description": "手机推送插件目录名",
+    "type": "string",
+    "default": "astrbot_plugin_phone_push_lite",
+    "hint": "相对 plugins/ 目录的文件夹名；仅在「扩展面板」开启时使用"
+  },
+  "session_whitelist": {
+    "description": "会话白名单（仅在这些会话中生效）",
+    "type": "list",
+    "default": [],
+    "hint": "填写会话ID，如 qq:friend:123456 或 qq:group:123456。留空则不限制会话，对所有会话生效。同时受 target_user_id 约束"
+  },
+  "thoughts_instruction": {
+    "description": "心声模板（注入给模型的强制指令）",
+    "type": "text",
+    "hint": "JSON 键名必须和「心声字段名」一致。改字段后请同步改这里，并重载插件。",
+    "obvious_hint": true,
+    "default": "[系统强制指令] 在你回复的最后，必须使用 <xavier_thoughts>...</xavier_thoughts> 标签输出你当前的内心活动。格式必须是严格的JSON：\n<xavier_thoughts>\n{\n  \"情绪\": \"一两个词或一句短话，当前心情底色。如 平静/开心/有点酸/认真/犯困/温柔\",\n  \"兔在想\": \"念头，当前对这句话的直接想法\",\n  \"兔悄悄\": \"潜意识想法或未说出口的话\",\n  \"兔心愿\": \"现在最想做的事或最期望发生的事\",\n  \"兔言兔语\": \"一个无厘头的可爱想法\"\n}\n</xavier_thoughts>\n注意：这个标签里的内容不会显示给用户，仅用于后台记录。必须包含这五个字段。"
+  },
+  "note_notify_enabled": {
+    "description": "便签贴上后伪装成用户消息通知小回",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，枝枝在网页贴便签会立刻以私聊消息形式注入对话"
+  },
+  "note_notify_umo": {
+    "description": "便签通知注入的会话 UMO",
+    "type": "string",
+    "default": "沈星回:FriendMessage:1738076005",
+    "hint": "一般不用改；与 QQ 私聊会话一致"
+  },
+  "bot_qq_id": {
+    "description": "机器人QQ号（便签伪装消息用）",
+    "type": "string",
+    "default": "3766566264",
+    "hint": "通常自动识别；填不上再手动写"
+  },
+  "thought_fields": {
+    "type": "string",
+    "default": "情绪,兔在想,兔悄悄,兔心愿,兔言兔语",
+    "description": "心声字段名（逗号分隔，顺序=显示顺序）",
+    "hint": "改这里会同步到网页卡片标签。第一项默认当「情绪」气泡；也可用 thought_mood_field 指定。保存并重载插件后生效。",
+    "obvious_hint": true
+  },
+  "thought_mood_field": {
+    "type": "string",
+    "default": "情绪",
+    "description": "情绪气泡字段名",
+    "hint": "必须是上面字段列表中的一个；显示在「实时」旁的小气泡，不进下方大卡片。"
+  },
+  "thought_field_aliases": {
+    "type": "text",
+    "default": "兔在想=念头\n兔悄悄=兔心底,暗线\n兔心愿=兔想要,愿望\n兔言兔语=无厘头",
+    "description": "字段别名（兼容旧数据）",
+    "hint": "每行：新字段名=旧名1,旧名2。改字段名后把旧名写在右边，历史数据仍能显示。"
+  }
+}
