@@ -372,6 +372,25 @@ body.glass .hist-note,body.glass .live-note,body.glass .fav-note{
 .fav-page-btn:disabled{opacity:.35;cursor:not-allowed}
 .fav-page-info{font-size:12px;color:rgba(30,27,46,0.4)}
 body.glass .fav-modal{background:rgba(255,255,255,0.42);backdrop-filter:blur(22px) saturate(1.5)}
+
+.fav-tabs{display:flex;gap:8px;padding:0 16px 10px}
+.fav-tab{
+  flex:1;padding:7px 10px;border-radius:999px;border:1px solid rgba(160,155,195,0.18);
+  background:rgba(160,155,195,0.06);color:#8a83a8;font-size:12px;cursor:pointer;transition:all .2s
+}
+.fav-tab.on{background:rgba(160,155,195,0.16);color:#6d5d8a;border-color:rgba(160,155,195,0.28);font-weight:600}
+.fav-sent-card{
+  background:rgba(255,255,255,0.7);border:1px solid rgba(182,169,200,0.14);
+  border-radius:16px;padding:12px 14px;margin-bottom:10px;animation:slideUp .22s ease both
+}
+.fav-sent-card:last-child{margin-bottom:0}
+.fav-sent-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.fav-sent-emoji{font-size:15px;user-select:none}
+.fav-sent-emoji.faved{filter:drop-shadow(0 0 4px rgba(232,120,150,.45))}
+.fav-sent-label{font-size:11px;font-weight:600}
+.fav-sent-time{margin-left:auto;font-size:10px;color:rgba(30,27,46,0.28)}
+.fav-sent-text{font-size:13px;line-height:1.6;color:rgba(30,27,46,0.78);white-space:pre-wrap;word-break:break-word}
+
 body.glass .fav-entry{background:rgba(255,255,255,0.22)}
 /* ===== CURRENT THOUGHTS (GRID 2x2) ===== */
 .t-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
@@ -811,20 +830,41 @@ async function toggleFieldFavorite(id,field){
   if(!id||!field)return
   const willOn=!fieldFavOn(id,field)
   if(!window._fieldFavMap)window._fieldFavMap={}
+  if(!window._favSentList)window._favSentList=[]
+  // 原文
+  let text=''
+  const cached=window._thoughtCache&&window._thoughtCache[id]
+  if(cached&&cached.thoughts)text=String(cached.thoughts[field]||'').trim()
+  if(!text){
+    // 实时卡片
+    const live=document.querySelector(`.tc[data-field="${CSS.escape?CSS.escape(field):field}"] .tc-body`)
+    if(live&&!live.classList.contains('muted'))text=(live.textContent||'').trim()
+  }
   if(willOn){
     if(!window._fieldFavMap[id])window._fieldFavMap[id]=[]
     if(!window._fieldFavMap[id].includes(field))window._fieldFavMap[id].push(field)
+    // 乐观写入单句列表
+    window._favSentList=window._favSentList.filter(s=>!(String(s.thought_id)===String(id)&&String(s.field)===String(field)))
+    window._favSentList.unshift({thought_id:id,field,text,favorited_at:Date.now(),source_updated_at:(cached&&cached.updated_at)||null})
   }else if(window._fieldFavMap[id]){
     window._fieldFavMap[id]=window._fieldFavMap[id].filter(x=>x!==field)
     if(!window._fieldFavMap[id].length)delete window._fieldFavMap[id]
+    window._favSentList=window._favSentList.filter(s=>!(String(s.thought_id)===String(id)&&String(s.field)===String(field)))
   }
-  syncFieldHearts()
+  syncFieldHearts();updateFavCount()
   try{
-    const r=await fetch('/api/thoughts/field-favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,field,action:'toggle'})})
+    const r=await fetch('/api/thoughts/field-favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,field,action:'toggle',text,updated_at:(cached&&cached.updated_at)||null})})
     const d=await r.json()
-    if(d&&d.ok&&d.fields)window._fieldFavMap=d.fields
-    syncFieldHearts()
-  }catch(e){}
+    if(d&&d.ok){
+      if(d.fields)window._fieldFavMap=d.fields
+      if(Array.isArray(d.sentences))window._favSentList=d.sentences
+      syncFieldHearts();updateFavCount()
+      if($('fav-overlay')&&$('fav-overlay').classList.contains('show'))renderFavoritesPage()
+    }else{
+      // 失败则重拉
+      syncFieldHearts();updateFavCount()
+    }
+  }catch(e){syncFieldHearts();updateFavCount()}
 }
 function applyThoughtSchema(schema){
   if(!schema||typeof schema!=='object')return
@@ -1206,7 +1246,9 @@ function resizeOpenHist(){
 function updateFavCount(n){
   const el=$('fav-count')
   if(!el)return
-  const c=typeof n==='number'?n:window._favIds.size
+  const full=(window._favIds&&window._favIds.size)||0
+  const sent=(window._favSentList&&window._favSentList.length)||0
+  const c=typeof n==='number'?n:(full+sent)
   el.textContent=String(c)
   el.classList.toggle('show',c>0)
 }
@@ -1268,6 +1310,7 @@ async function deleteHistory(id){
       // 本地缓存同步
       if(window._favIds)window._favIds.delete(String(id))
       if(window._fieldFavMap)delete window._fieldFavMap[String(id)]
+      if(window._favSentList)window._favSentList=window._favSentList.filter(s=>String(s.thought_id||'')!==String(id))
       if(window._notesMap)delete window._notesMap[String(id)]
       if(window._thoughtCache)delete window._thoughtCache[String(id)]
       // 历史签名作废，下次轮询会重拉
@@ -1427,20 +1470,76 @@ function openFavorites(){
   bindFavPager()
   window._favPage=0
   $('fav-overlay').classList.add('show')
-  // 拉最新收藏
   fetch('/api/thoughts/favorites').then(r=>r.json()).then(d=>{
     window._favList=Array.isArray(d.favorites)?d.favorites:[]
+    window._favSentList=Array.isArray(d.sentences)?d.sentences:[]
     window._favIds=new Set(window._favList.map(x=>String(x.id||'')).filter(Boolean))
-    updateFavCount(window._favList.length)
+    updateFavCount()
     renderFavoritesPage()
-    syncHeartButtons()
+    syncHeartButtons();syncFieldHearts()
   }).catch(()=>renderFavoritesPage())
 }
 function closeFavorites(){$('fav-overlay').classList.remove('show')}
+function buildFavUnifiedList(){
+  const full=Array.isArray(window._favList)?window._favList:[]
+  const sent=Array.isArray(window._favSentList)?window._favSentList:[]
+  const items=[]
+  for(const s of sent){
+    if(!s||typeof s!=='object')continue
+    items.push({
+      kind:'sent',
+      sort:Number(s.favorited_at||s.source_updated_at||0)||0,
+      thought_id:String(s.thought_id||s.id||''),
+      field:String(s.field||''),
+      text:String(s.text||''),
+      favorited_at:s.favorited_at,
+      source_updated_at:s.source_updated_at
+    })
+  }
+  for(const f of full){
+    if(!f||typeof f!=='object')continue
+    items.push({
+      kind:'full',
+      sort:Number(f.favorited_at||f.updated_at||0)||0,
+      id:String(f.id||''),
+      thoughts:f.thoughts||{},
+      updated_at:f.updated_at,
+      favorited_at:f.favorited_at
+    })
+  }
+  items.sort((a,b)=> (b.sort||0)-(a.sort||0))
+  return items
+}
+function favActiveList(){
+  return buildFavUnifiedList()
+}
+function favItemWeight(item){
+  // 整条占 2，单句占 1；一页容量 4 → 整条最多 2，单句最多 4
+  return (item && item.kind==='full') ? 2 : 1
+}
+function favPaginate(list){
+  const cap=4
+  const pages=[]
+  let cur=[], w=0
+  for(const item of (list||[])){
+    const iw=favItemWeight(item)
+    if(cur.length && w+iw>cap){
+      pages.push(cur)
+      cur=[]; w=0
+    }
+    cur.push(item)
+    w+=iw
+    if(w>=cap){
+      pages.push(cur)
+      cur=[]; w=0
+    }
+  }
+  if(cur.length)pages.push(cur)
+  return pages
+}
 function favTotalPages(){
-  const n=(window._favList||[]).length
-  const size=Math.max(1,window._favPageSize||2)
-  return Math.max(1, Math.ceil(n / size) || 1)
+  const pages=favPaginate(favActiveList())
+  return Math.max(1, pages.length || 1)
 }
 function favPrevPage(){
   if(window._favPage>0){
@@ -1459,19 +1558,33 @@ function renderFavoritesPage(){
   bindFavPager()
   const body=$('fav-modal-body'),info=$('fav-page-info'),prev=$('fav-prev'),next=$('fav-next')
   if(!body)return
-  const list=Array.isArray(window._favList)?window._favList:[]
-  const size=Math.max(1,window._favPageSize||2)
-  const totalPages=list.length?Math.max(1,Math.ceil(list.length/size)):0
+  const list=buildFavUnifiedList()
+  const pages=list.length?favPaginate(list):[]
+  const totalPages=pages.length
   if(totalPages && window._favPage>totalPages-1)window._favPage=Math.max(0,totalPages-1)
   if(window._favPage<0)window._favPage=0
-  const start=window._favPage*size
-  const pageItems=list.slice(start,start+size)
-  // 换页时滚回顶部，避免像瀑布流残留
+  const pageItems=pages[window._favPage]||[]
   body.scrollTop=0
   if(!list.length){
-    body.innerHTML=`<div class="fav-empty">还没有悄悄喜欢<br><span style="font-size:11px;opacity:.7">点小心心就能收进来</span></div>`
+    body.innerHTML=`<div class="fav-empty">还没有悄悄喜欢<br><span style="font-size:11px;opacity:.7">短按 emoji 收句子 · 点小心心收整条</span></div>`
   }else{
     body.innerHTML=pageItems.map((item,idx)=>{
+      if(item.kind==='sent'){
+        const tid=String(item.thought_id||'')
+        const field=String(item.field||'')
+        const m=T[field]||{e:'💭',c:'#7990A9',l:field}
+        const ts=item.favorited_at||item.source_updated_at
+        const txt=String(item.text||'').trim()||'（当时没记下原文）'
+        return `<div class="fav-sent-card" style="animation-delay:${idx*0.04}s">
+          <div class="fav-sent-top">
+            <span class="fav-sent-emoji faved" title="再点取消这一句" style="cursor:pointer" onclick="event.stopPropagation();toggleFieldFavorite('${aesc(tid)}','${aesc(field)}')">${m.e}</span>
+            <span class="fav-sent-label" style="color:${m.c}">${esc(m.l||field)}</span>
+            <span class="fav-sent-time">${ts?new Date(ts).toLocaleString():''}</span>
+          </div>
+          <div class="fav-sent-text">${esc(txt)}</div>
+        </div>`
+      }
+      // full card
       const t=normalizeThoughts(item.thoughts||{}),id=String(item.id||''),ts=item.updated_at||item.favorited_at
       cacheThought({id,updated_at:item.updated_at,thoughts:normalizeThoughts(t)})
       let rows=''
@@ -1498,12 +1611,14 @@ function renderFavoritesPage(){
   }
   if(info){
     info.textContent=list.length
-      ? `${window._favPage+1} / ${totalPages} · 共${list.length}条`
+      ? `${window._favPage+1} / ${totalPages} · 共${list.length}`
       : `0 / 0`
   }
   if(prev)prev.disabled=!list.length||window._favPage<=0
   if(next)next.disabled=!list.length||window._favPage>=Math.max(totalPages-1,0)
 }
+
+
 
 async function loadThoughts(){
   const c=$('t-container');if(!c)return
@@ -1513,6 +1628,8 @@ async function loadThoughts(){
     const favIds=new Set((d.favorite_ids||[]).map(String))
     window._favIds=favIds
     window._fieldFavMap=d.field_favorites||{}
+    if(Array.isArray(d.field_sentences))window._favSentList=d.field_sentences
+    else if(!window._favSentList)window._favSentList=[]
     updateFavCount(typeof d.favorites_count==='number'?d.favorites_count:favIds.size)
     if(curId)cacheThought({id:curId,updated_at:ts,thoughts:normalizeThoughts(t)})
 
