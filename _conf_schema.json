@@ -9,14 +9,14 @@
   "visualizer_port": {
     "description": "前端服务端口",
     "type": "int",
-    "default": 1016,
-    "hint": "修改后需要重启插件生效"
+    "default": 8765,
+    "hint": "修改后需要重启插件生效；请自行选择未占用端口"
   },
   "target_user_id": {
-    "description": "目标用户QQ号（仅对该用户启用心声注入/提取）",
+    "description": "目标用户 ID（仅对该用户启用心声注入/提取）",
     "type": "string",
-    "default": "1738076005",
-    "hint": "留空则对所有用户生效"
+    "default": "",
+    "hint": "填对方平台用户 ID；留空则对所有用户生效（请谨慎）"
   },
   "visualizer_enabled": {
     "description": "启用心声前端可视化服务",
@@ -53,19 +53,19 @@
     "description": "便签贴上后伪装成用户消息通知小回",
     "type": "bool",
     "default": true,
-    "hint": "开启后，枝枝在网页贴便签会立刻以私聊消息形式注入对话"
+    "hint": "开启后，网页贴便签会立刻以私聊消息形式注入对话"
   },
   "note_notify_umo": {
     "description": "便签通知注入的会话 UMO",
     "type": "string",
-    "default": "沈星回:FriendMessage:1738076005",
-    "hint": "一般不用改；与 QQ 私聊会话一致"
+    "default": "",
+    "hint": "便签通知注入的会话 UMO，如 platform:FriendMessage:用户ID；留空则尝试用当前目标会话"
   },
   "bot_qq_id": {
-    "description": "机器人QQ号（便签伪装消息用）",
+    "description": "机器人账号 ID（便签伪装消息用）",
     "type": "string",
-    "default": "3766566264",
-    "hint": "通常自动识别；填不上再手动写"
+    "default": "",
+    "hint": "通常自动识别；填不上再手动写。切勿把别人的号写进公开示例"
   },
   "thought_fields": {
     "type": "string",
