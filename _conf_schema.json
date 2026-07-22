@@ -13,10 +13,11 @@
     "hint": "修改后需要重启插件生效；请自行选择未占用端口"
   },
   "target_user_id": {
-    "description": "目标用户 ID（仅对该用户启用心声注入/提取）",
+    "description": "目标用户 ID（只对这个人启用心声）",
     "type": "string",
     "default": "",
-    "hint": "填对方平台用户 ID；留空则对所有用户生效（请谨慎）"
+    "hint": "填「聊天对象」在当前平台的用户 ID，不是插件自己的编号。\n· QQ 私聊/群：一般就是对方的 QQ 号（一串数字）\n· 企微等其它平台：填该平台返回的用户 ID（不一定是 QQ 号）\n· 留空：对所有人生效（容易串数据，不推荐）\n保存后请重载插件。",
+    "obvious_hint": true
   },
   "visualizer_enabled": {
     "description": "启用心声前端可视化服务",
@@ -37,10 +38,11 @@
     "hint": "相对 plugins/ 目录的文件夹名；仅在「扩展面板」开启时使用"
   },
   "session_whitelist": {
-    "description": "会话白名单（仅在这些会话中生效）",
+    "description": "会话白名单（只在这些会话里生效）",
     "type": "list",
     "default": [],
-    "hint": "填写会话ID，如 qq:friend:123456 或 qq:group:123456。留空则不限制会话，对所有会话生效。同时受 target_user_id 约束"
+    "hint": "这里的「会话 ID」= AstrBot 用来区分对话的字符串，不是单独一个神秘编号。\n常见写法：\n· QQ 好友：qq:FriendMessage:对方QQ号  或  适配器名:FriendMessage:对方QQ号\n· QQ 群：qq:GroupMessage:群号\n也可只写纯数字会话片段做匹配。\n留空 = 不限制会话（仍受「目标用户 ID」约束）。",
+    "obvious_hint": true
   },
   "thoughts_instruction": {
     "description": "心声模板（注入给模型的强制指令）",
@@ -56,16 +58,18 @@
     "hint": "开启后，网页贴便签会立刻以私聊消息形式注入对话"
   },
   "note_notify_umo": {
-    "description": "便签通知注入的会话 UMO",
+    "description": "便签通知注入的会话标识（UMO）",
     "type": "string",
     "default": "",
-    "hint": "便签通知注入的会话 UMO，如 platform:FriendMessage:用户ID；留空则尝试用当前目标会话"
+    "hint": "UMO = Unified Message Origin，AstrBot 的「完整会话地址」，用来指定便签要注入到哪一段对话。\n格式一般是：平台名:消息类型:用户或群ID\n例：qq:FriendMessage:123456789（把 123456789 换成对方 QQ 号）\n· 第三段通常就是用户 ID / QQ 号\n· 留空：尽量用当前目标用户对应会话\n不会用可先空着，或从 AstrBot 日志/会话列表里抄完整会话串。",
+    "obvious_hint": true
   },
   "bot_qq_id": {
-    "description": "机器人账号 ID（便签伪装消息用）",
+    "description": "机器人 QQ 号（账号数字 ID）",
     "type": "string",
     "default": "",
-    "hint": "通常自动识别；填不上再手动写。切勿把别人的号写进公开示例"
+    "hint": "填「机器人自己的 QQ 号」（一串数字），用于便签伪装成私聊消息时标明发送方。\n· 一般可留空，插件会尝试自动识别\n· 自动识别失败再手动填写\n· 不是对方用户的 QQ，也不是 target_user_id",
+    "obvious_hint": true
   },
   "thought_fields": {
     "type": "string",
