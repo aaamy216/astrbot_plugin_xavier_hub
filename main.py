@@ -414,24 +414,61 @@ class XavierHubPlugin(Star):
             logger.error(f"[XavierHub] save favorites failed: {e}")
 
     # ===== 单句话红心（field-level） =====
-    def _load_field_favorites(self) -> dict:
+    def _load_field_favorites_payload(self) -> dict:
+        """完整字段收藏文件：fields 映射 + sentences 单句列表。"""
         try:
             p = self.thoughts_field_favorites_path
             if p.exists():
                 data = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and isinstance(data.get("fields"), dict):
-                    return data["fields"]
-                if isinstance(data, dict):
-                    return data
+                if not isinstance(data, dict):
+                    return {"fields": {}, "sentences": []}
+                fields = data.get("fields")
+                if not isinstance(fields, dict):
+                    # 兼容旧格式：整文件就是 {tid: [fields]}
+                    if all(isinstance(v, list) for v in data.values()):
+                        fields = data
+                    else:
+                        fields = {}
+                sentences = data.get("sentences")
+                if not isinstance(sentences, list):
+                    sentences = []
+                return {"fields": fields, "sentences": sentences}
         except Exception as e:
             logger.debug(f"[XavierHub] load field-favorites failed: {e}")
-        return {}
+        return {"fields": {}, "sentences": []}
 
-    def _save_field_favorites(self, fields: dict):
+    def _load_field_favorites(self) -> dict:
+        return self._load_field_favorites_payload().get("fields") or {}
+
+    def _load_field_sentences(self) -> list:
+        return self._load_field_favorites_payload().get("sentences") or []
+
+    def _save_field_favorites(self, fields: dict, sentences: list = None):
         try:
+            if sentences is None:
+                sentences = self._load_field_sentences()
+            # 规范化 sentences
+            clean_sents = []
+            for s in sentences or []:
+                if not isinstance(s, dict):
+                    continue
+                tid = str(s.get("thought_id") or s.get("id") or "").strip()
+                field = str(s.get("field") or "").strip()
+                if not tid or not field:
+                    continue
+                clean_sents.append({
+                    "thought_id": tid,
+                    "field": field,
+                    "text": str(s.get("text") or "")[:500],
+                    "favorited_at": s.get("favorited_at") or int(time.time() * 1000),
+                    "source_updated_at": s.get("source_updated_at"),
+                })
+            # 最多保留 300 句
+            clean_sents = clean_sents[:300]
             payload = {
                 "updated_at": int(time.time() * 1000),
-                "fields": fields,
+                "fields": fields if isinstance(fields, dict) else {},
+                "sentences": clean_sents,
             }
             self.thoughts_field_favorites_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
@@ -950,6 +987,8 @@ class XavierHubPlugin(Star):
         load_favorites = self._load_favorites
         save_favorites = self._save_favorites
         load_field_favorites = self._load_field_favorites
+        load_field_sentences = self._load_field_sentences
+        load_field_favorites_payload = self._load_field_favorites_payload
         save_field_favorites = self._save_field_favorites
         load_notes = self._load_notes
         save_notes = self._save_notes
@@ -1001,16 +1040,21 @@ class XavierHubPlugin(Star):
                 try:
                     if self.path.startswith("/api/thoughts/favorites"):
                         favs = load_favorites()
+                        sents = load_field_sentences()
                         self._send(200, json.dumps({
                             "favorites": favs,
                             "count": len(favs),
+                            "sentences": sents,
+                            "sentence_count": len(sents),
+                            "total_count": len(favs) + len(sents),
                         }, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
                     if self.path.startswith("/api/thoughts/field-favorites"):
-                        fields = load_field_favorites()
+                        payload = load_field_favorites_payload()
                         self._send(200, json.dumps({
-                            "fields": fields,
+                            "fields": payload.get("fields") or {},
+                            "sentences": payload.get("sentences") or [],
                         }, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
@@ -1046,8 +1090,10 @@ class XavierHubPlugin(Star):
                         data["history"] = hist
                         data["favorite_ids"] = list(fav_ids)
                         data["favorites_count"] = len(favs)
-                        # 单句话红心：{thought_id: [字段名...]}
-                        data["field_favorites"] = load_field_favorites()
+                        # 单句话红心：{thought_id: [字段名...]} + sentences 列表
+                        _ff_payload = load_field_favorites_payload()
+                        data["field_favorites"] = _ff_payload.get("fields") or {}
+                        data["field_sentences"] = _ff_payload.get("sentences") or []
                         # 枝枝的便签 map：id -> {text, fields, updated_at}
                         notes_map = load_notes() or {}
                         slim_notes = {}
@@ -1299,13 +1345,15 @@ class XavierHubPlugin(Star):
                             body = {}
                         tid = str(body.get("id") or "").strip()
                         field = str(body.get("field") or "").strip()
-                        action = str(body.get("action") or "toggle").strip()
+                        action = str(body.get("action") or "toggle").strip().lower()
+                        text_in = str(body.get("text") or "").strip()
+                        source_updated_at = body.get("source_updated_at") or body.get("updated_at")
                         if not tid or not field:
                             self._send(400, json.dumps({"ok": 0, "error": "missing id or field"}, ensure_ascii=False), "application/json; charset=utf-8")
                             return
-                        fields_map = load_field_favorites()
-                        if not isinstance(fields_map, dict):
-                            fields_map = {}
+                        payload = load_field_favorites_payload()
+                        fields_map = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                        sentences = payload.get("sentences") if isinstance(payload.get("sentences"), list) else []
                         cur_set = set(fields_map.get(tid) or [])
                         on = False
                         if action == "remove":
@@ -1322,18 +1370,56 @@ class XavierHubPlugin(Star):
                             else:
                                 cur_set.add(field)
                                 on = True
-                        # 只保留非空；空 array 时直接删 key，避免文件越来越大
+                        # 字段映射
                         if cur_set:
                             fields_map[tid] = sorted(cur_set)
                         else:
                             fields_map.pop(tid, None)
-                        save_field_favorites(fields_map)
+
+                        # 单句列表：on 时写入/更新一句；off 时移除
+                        def _sent_key(s):
+                            return (str(s.get("thought_id") or ""), str(s.get("field") or ""))
+
+                        sentences = [s for s in sentences if isinstance(s, dict) and _sent_key(s) != (tid, field)]
+                        if on:
+                            # 若前端没给 text，从 state/history 补
+                            if not text_in:
+                                try:
+                                    state = self._read_json(thoughts_state_path) or {}
+                                    cur_t = state.get("thoughts") if isinstance(state.get("thoughts"), dict) else {}
+                                    cur_id = thought_item_id(state.get("updated_at"), cur_t)
+                                    if str(cur_id) == tid:
+                                        text_in = str(cur_t.get(field) or "").strip()
+                                        source_updated_at = source_updated_at or state.get("updated_at")
+                                    if not text_in:
+                                        for h in (state.get("history") or []):
+                                            if not isinstance(h, dict):
+                                                continue
+                                            ht = h.get("thoughts") if isinstance(h.get("thoughts"), dict) else {}
+                                            hid = h.get("id") or thought_item_id(h.get("updated_at"), ht)
+                                            if str(hid) == tid:
+                                                text_in = str(ht.get(field) or "").strip()
+                                                source_updated_at = source_updated_at or h.get("updated_at")
+                                                break
+                                except Exception:
+                                    pass
+                            sentences.insert(0, {
+                                "thought_id": tid,
+                                "field": field,
+                                "text": text_in[:500],
+                                "favorited_at": int(time.time() * 1000),
+                                "source_updated_at": source_updated_at,
+                            })
+
+                        save_field_favorites(fields_map, sentences)
                         self._send(200, json.dumps({
                             "ok": 1,
                             "id": tid,
                             "field": field,
                             "on": on,
+                            "text": text_in if on else "",
                             "fields": fields_map,
+                            "sentences": sentences,
                         }, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
@@ -1374,10 +1460,18 @@ class XavierHubPlugin(Star):
                         except Exception:
                             pass
                         try:
-                            ff = load_field_favorites()
-                            if isinstance(ff, dict) and tid in ff:
+                            payload = load_field_favorites_payload()
+                            ff = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                            sents = payload.get("sentences") if isinstance(payload.get("sentences"), list) else []
+                            changed = False
+                            if tid in ff:
                                 ff.pop(tid, None)
-                                save_field_favorites(ff)
+                                changed = True
+                            sents2 = [s for s in sents if str((s or {}).get("thought_id") or "") != tid]
+                            if len(sents2) != len(sents):
+                                changed = True
+                            if changed:
+                                save_field_favorites(ff, sents2)
                         except Exception:
                             pass
                         try:
