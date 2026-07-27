@@ -1,0 +1,1808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Xavier · 心声</title>
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Xavier心声">
+<meta name="theme-color" content="#A09BC3">
+<meta name="application-name" content="Xavier心声">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Noto Sans SC',system-ui,sans-serif;
+  background:linear-gradient(165deg,#F4F2F6 0%,#EAEEF2 40%,#E8F0F2 100%);
+  color:#2a2a35;min-height:100vh;
+  background-attachment:fixed
+}
+/* ===== DECORATIVE ===== */
+.bg-deco{
+  position:fixed;top:-40%;right:-10%;width:600px;height:600px;
+  background:radial-gradient(circle,rgba(182,169,200,0.14) 0%,transparent 70%);
+  border-radius:50%;pointer-events:none;z-index:0
+}
+.bg-deco2{
+  position:fixed;bottom:-30%;left:-15%;width:500px;height:500px;
+  background:radial-gradient(circle,rgba(157,191,195,0.12) 0%,transparent 70%);
+  border-radius:50%;pointer-events:none;z-index:0
+}
+/* ===== NAV ===== */
+.nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  display:flex;justify-content:center;align-items:center;
+  padding:18px 24px;gap:6px;
+  background:rgba(255,255,255,0.72);
+  backdrop-filter:blur(24px) saturate(1.4);
+  -webkit-backdrop-filter:blur(24px) saturate(1.4);
+  border-bottom:1px solid rgba(182,169,200,0.12)
+}
+.nav-tab{
+  padding:8px 28px;font-size:13px;font-weight:500;letter-spacing:1.2px;
+  color:rgba(42,42,53,0.4);cursor:pointer;border-radius:999px;
+  border:1px solid transparent;
+  transition:all .4s cubic-bezier(.4,0,.2,1);user-select:none
+}
+.nav-tab:hover{color:#2a2a35;background:rgba(160,155,195,0.08)}
+.nav-tab.active{
+  color:#A09BC3;background:rgba(160,155,195,0.12);
+  border-color:rgba(160,155,195,0.20);
+  box-shadow:0 2px 12px rgba(160,155,195,0.12)
+}
+/* ===== GLASS TOGGLE ===== */
+body.glass .nitem:hover{background:rgba(255,255,255,0.10)}
+body.glass .nico{background:rgba(255,255,255,0.10);border-color:rgba(255,255,255,0.15)}
+.glass-toggle{
+  position:absolute;right:24px;top:50%;transform:translateY(-50%);
+  width:36px;height:36px;border-radius:50%;
+  border:1px solid rgba(160,155,195,0.25);
+  background:rgba(255,255,255,0.55);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:15px;flex-shrink:0;
+  transition:all .3s cubic-bezier(.4,0,.2,1);
+  box-shadow:0 2px 10px rgba(0,0,0,0.04)
+}
+.glass-toggle:hover{
+  background:rgba(160,155,195,0.18);
+  box-shadow:0 4px 16px rgba(160,155,195,0.18)
+}
+.glass-toggle:active{transform:translateY(-50%) scale(.94)}
+/* glass mode */
+body.glass{
+  background:linear-gradient(165deg,#D8C9E0 0%,#C5D5DF 40%,#C8DEE3 100%);
+}
+body.glass .bg-deco{
+  top:-30%;right:-5%;width:700px;height:700px;
+  background:radial-gradient(circle,rgba(182,169,200,0.25) 0%,transparent 70%)
+}
+body.glass .bg-deco2{
+  bottom:-20%;left:-10%;width:600px;height:600px;
+  background:radial-gradient(circle,rgba(157,191,195,0.20) 0%,transparent 70%)
+}
+body.glass .tc{
+  background:rgba(255,255,255,0.35);
+  backdrop-filter:blur(20px) saturate(1.6);
+  -webkit-backdrop-filter:blur(20px) saturate(1.6);
+  border:1px solid rgba(255,255,255,0.5)
+}
+body.glass .phone-frame{
+  background:rgba(255,255,255,0.30);
+  backdrop-filter:blur(24px) saturate(1.6);
+  -webkit-backdrop-filter:blur(24px) saturate(1.6);
+  border:1px solid rgba(255,255,255,0.45)
+}
+body.glass .history-toggle{
+  background:rgba(255,255,255,0.30);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,0.45)
+}
+body.glass .hist-item{
+  /* 与下方 HISTORY 段保持一致：降 blur，减桌面卡顿 */
+  background:rgba(255,255,255,0.42);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,0.40)
+}
+body.glass .nav{
+  background:rgba(255,255,255,0.45);
+  backdrop-filter:blur(28px) saturate(1.6);
+  -webkit-backdrop-filter:blur(28px) saturate(1.6)
+}
+body.glass .page-header h1{color:#7e6e98}
+/* ===== PAGES ===== */
+.page{display:none;padding-top:76px;min-height:100vh;position:relative;z-index:1}
+.page.active{display:block;animation:pageIn .5s cubic-bezier(.4,0,.2,1)}
+@keyframes pageIn{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+.wrap{max-width:640px;margin:0 auto;padding:32px 20px 64px}
+/* ===== HEADER ===== */
+.page-header{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:12px;margin-bottom:18px
+}
+.page-header h1{
+  font-size:28px;font-weight:300;
+  color:#A09BC3;
+  letter-spacing:6px;
+  margin:0;flex:1;text-align:center
+}
+.page-header .fav-entry{flex-shrink:0;margin-right:2px}
+/* 标题仍视觉居中：左右各留等宽占位 */
+.page-header::before{
+  content:"";width:34px;height:34px;flex-shrink:0
+}
+
+/* ===== TOOLBAR ===== */
+.toolbar{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:24px
+}
+.toolbar-status{font-size:12px;color:rgba(42,42,53,0.25);letter-spacing:.5px}
+.live-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin:0 2px 10px;min-height:28px
+}
+.live-label{
+  font-size:12px;color:rgba(42,42,53,0.28);letter-spacing:.5px;
+  padding-left:2px
+}
+.live-heart-slot{
+  display:flex;align-items:center;justify-content:flex-end;
+  min-width:28px;min-height:28px
+}
+#p-thoughts .toolbar{display:none}
+.toolbar-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+.fav-entry{
+  width:34px;height:34px;border-radius:50%;
+  border:1px solid rgba(232,120,140,0.22);
+  background:rgba(255,255,255,0.55);
+  color:#E8788C;
+  display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:15px;line-height:1;
+  box-shadow:0 2px 10px rgba(232,120,140,0.08);
+  transition:all .25s cubic-bezier(.4,0,.2,1);
+  position:relative
+}
+.fav-entry:hover{background:rgba(232,120,140,0.12);transform:scale(1.06)}
+.fav-entry:active{transform:scale(.94)}
+.fav-entry .fav-count{
+  position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;
+  padding:0 4px;border-radius:999px;background:#E8788C;color:#fff;
+  font-size:10px;font-weight:600;display:none;align-items:center;justify-content:center
+}
+.fav-entry .fav-count.show{display:inline-flex}
+.toolbar-btn{
+  padding:7px 20px;font-size:12px;font-weight:500;letter-spacing:.3px;
+  border-radius:999px;border:1px solid rgba(160,155,195,0.20);
+  background:rgba(160,155,195,0.08);color:#A09BC3;
+  cursor:pointer;transition:all .25s
+}
+.toolbar-btn:hover{background:#A09BC3;color:#fff;border-color:#A09BC3;box-shadow:0 4px 16px rgba(160,155,195,0.25)}
+.toolbar-btn:active{transform:scale(.96)}
+/* ===== FAVORITE HEARTS ===== */
+.fav-heart{
+  border:none;background:transparent;cursor:pointer;
+  font-size:15px;line-height:1;padding:2px 4px;border-radius:8px;
+  color:rgba(30,27,46,0.22);transition:all .2s;flex-shrink:0
+}
+.fav-heart:hover{color:rgba(232,120,140,0.75);background:rgba(232,120,140,0.08);transform:scale(1.08)}
+.fav-heart.on{color:#E8788C}
+.fav-heart:active{transform:scale(.9)}
+/* ===== HISTORY DELETE (防误触：点×再确认) ===== */
+.hist-del-btn{
+  border:none;background:transparent;cursor:pointer;
+  font-size:14px;line-height:1;padding:2px 5px;border-radius:8px;
+  color:rgba(30,27,46,0.18);transition:all .2s;flex-shrink:0
+}
+.hist-del-btn:hover{color:rgba(192,107,122,0.9);background:rgba(232,120,140,0.1);transform:scale(1.08)}
+.hist-del-btn:active{transform:scale(.9)}
+.hist-del-btn.armed{
+  color:#fff;background:#E8788C;box-shadow:0 2px 10px rgba(232,120,140,0.35)
+}
+/* ===== FIELD FAVORITE (emoji点按收藏) ===== */
+.hist-emoji.faved, .fav-card-emoji.faved, .tc-icon.faved{
+  text-shadow:0 0 10px rgba(232,120,140,0.45),0 0 24px rgba(232,120,140,0.18);
+  transform:scale(1.05)
+}
+.hist-emoji-wrap{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
+.fav-card-emoji-wrap{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
+.tc-head{justify-content:flex-start}
+.tc-head .fav-heart{margin-left:auto}
+
+/* ===== NOTE (枝枝写给我的便签) ===== */
+.note-btn{
+  border:none;background:transparent;cursor:pointer;
+  font-size:13px;line-height:1;padding:2px 4px;border-radius:8px;
+  color:rgba(30,27,46,0.22);transition:all .2s;flex-shrink:0
+}
+.note-btn:hover{color:rgba(160,155,195,0.85);background:rgba(160,155,195,0.10);transform:scale(1.08)}
+.note-btn.on{color:#A09BC3}
+.note-btn:active{transform:scale(.9)}
+.hist-note,.live-note,.fav-note{
+  margin-top:8px;padding:8px 10px;
+  border-radius:12px;
+  background:rgba(160,155,195,0.08);
+  border:1px dashed rgba(160,155,195,0.28);
+  color:rgba(90,80,110,0.78);
+  font-size:12px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word
+}
+.hist-note .note-label,.live-note .note-label,.fav-note .note-label{
+  display:inline-block;font-size:10px;font-weight:600;letter-spacing:.5px;
+  color:#A09BC3;margin-right:6px
+}
+.note-overlay{
+  display:none;position:fixed;inset:0;z-index:10020;
+  background:rgba(20,18,28,0.28);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;opacity:0;transition:opacity .2s
+}
+.note-overlay.show{display:flex;opacity:1}
+.note-modal{
+  width:min(92vw,380px);
+  background:rgba(255,255,255,0.94);
+  border:1px solid rgba(255,255,255,0.7);
+  border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,0.12);
+  padding:18px 18px 14px;
+  transform:translateY(14px) scale(.97);
+  transition:transform .25s cubic-bezier(.4,0,.2,1)
+}
+.note-overlay.show .note-modal{transform:translateY(0) scale(1)}
+.note-modal-title{font-size:14px;font-weight:600;color:#6d5d8a;margin-bottom:6px}
+.note-modal-hint{font-size:11px;color:rgba(30,27,46,0.35);margin-bottom:12px;line-height:1.5}
+.note-input{
+  width:100%;min-height:72px;resize:vertical;
+  border:1px solid rgba(160,155,195,0.28);
+  border-radius:14px;padding:10px 12px;
+  font-size:13px;line-height:1.55;color:#2a2a35;
+  background:rgba(255,255,255,0.85);outline:none;
+  font-family:inherit
+}
+.note-input:focus{border-color:rgba(160,155,195,0.55);box-shadow:0 0 0 3px rgba(160,155,195,0.12)}
+.note-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+.note-act{
+  min-width:68px;padding:8px 14px;border-radius:999px;font-size:12px;cursor:pointer;
+  border:1px solid rgba(160,155,195,0.22);background:rgba(160,155,195,0.08);color:#7a7399
+}
+.note-act.primary{background:#A09BC3;border-color:#A09BC3;color:#fff}
+.note-act.danger{color:#c06b7a;border-color:rgba(232,120,140,0.25);background:rgba(232,120,140,0.06)}
+.note-act:disabled{opacity:.45;cursor:not-allowed}
+body.glass .hist-note,body.glass .live-note,body.glass .fav-note{
+  background:rgba(255,255,255,0.22);border-color:rgba(255,255,255,0.35)
+}
+/* ===== FIELD STICKER ===== */
+.tc-icon,.hist-emoji,.fav-card-emoji,.mood-chip{
+  user-select:none;-webkit-user-select:none;
+  -webkit-touch-callout:none;touch-action:manipulation
+}
+.tc-icon.stickerable,.hist-emoji.stickerable,.fav-card-emoji.stickerable,.mood-chip.stickerable{
+  cursor:pointer;position:relative;border-radius:10px;
+  transition:transform .15s ease,background .15s ease
+}
+.tc-icon.stickerable:active,.hist-emoji.stickerable:active,.fav-card-emoji.stickerable:active,.mood-chip.stickerable:active{
+  transform:scale(.92)
+}
+.tc-icon.has-sticker,.hist-emoji.has-sticker,.fav-card-emoji.has-sticker,.mood-chip.has-sticker{
+  box-shadow:0 0 0 2px rgba(160,155,195,0.35)
+}
+.sticker-dot{
+  position:absolute;top:-3px;right:-4px;width:7px;height:7px;border-radius:50%;
+  background:#A09BC3;box-shadow:0 0 0 2px rgba(255,255,255,0.85)
+}
+.field-sticker{
+  margin-top:4px;margin-left:22px;padding:5px 8px;
+  border-radius:10px;
+  background:rgba(160,155,195,0.08);
+  border:1px dashed rgba(160,155,195,0.24);
+  color:rgba(90,80,110,0.78);
+  font-size:11px;line-height:1.45;
+  white-space:pre-wrap;word-break:break-word
+}
+.tc .field-sticker{margin-left:0;margin-top:8px}
+.field-sticker .note-label{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.5px;color:#A09BC3;margin-right:6px}
+.mood-chip.stickerable{padding-right:8px}
+
+
+.hist-item-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.hist-item-top .hist-time{flex:1;min-width:0}
+.hist-item-actions{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.fav-card-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.fav-card-top .fav-card-time{flex:1;min-width:0}
+.fav-card-top .hist-item-actions,.fav-card-actions{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.hist-item-top .hist-time{margin-bottom:0}
+/* ===== FAVORITES MODAL ===== */
+.fav-overlay{
+  display:none;position:fixed;inset:0;z-index:10000;
+  background:rgba(20,18,28,0.28);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;opacity:0;transition:opacity .25s
+}
+.fav-overlay.show{display:flex;opacity:1}
+.fav-modal{
+  width:min(92vw,420px);max-height:78vh;
+  background:rgba(255,255,255,0.92);
+  border:1px solid rgba(255,255,255,0.7);
+  border-radius:24px;box-shadow:0 20px 60px rgba(0,0,0,0.12);
+  display:flex;flex-direction:column;overflow:hidden;
+  transform:translateY(18px) scale(.97);
+  transition:transform .3s cubic-bezier(.4,0,.2,1)
+}
+.fav-overlay.show .fav-modal{transform:translateY(0) scale(1)}
+.fav-modal-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 20px 12px;border-bottom:1px solid rgba(182,169,200,0.12)
+}
+.fav-modal-title{font-size:15px;font-weight:600;color:#6d5d8a;letter-spacing:.5px}
+.fav-modal-close{cursor:pointer;font-size:22px;color:rgba(30,27,46,0.25);line-height:1}
+.fav-modal-close:hover{color:rgba(30,27,46,0.5)}
+.fav-modal-body{
+  padding:14px 16px;overflow-y:auto;flex:1;
+  min-height:220px;max-height:52vh
+}
+.fav-empty{text-align:center;padding:40px 16px;color:rgba(30,27,46,0.35);font-size:13px}
+.fav-card{
+  background:rgba(255,255,255,0.7);border:1px solid rgba(182,169,200,0.14);
+  border-radius:16px;padding:14px 14px 12px;margin-bottom:10px;
+  animation:slideUp .22s ease both
+}
+.fav-card:last-child{margin-bottom:0}
+.fav-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.fav-card-time{font-size:11px;color:rgba(30,27,46,0.28)}
+.fav-card-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:4px}
+.fav-card-row:last-child{margin-bottom:0}
+.fav-card-emoji{font-size:13px;flex-shrink:0}
+.fav-card-label{font-size:10px;font-weight:600;min-width:28px;flex-shrink:0;margin-top:2px}
+.fav-card-text{font-size:12.5px;line-height:1.55;color:rgba(30,27,46,0.72);flex:1;white-space:pre-wrap;word-break:break-word}
+.fav-pager{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:12px 16px 16px;border-top:1px solid rgba(182,169,200,0.12)
+}
+.fav-page-btn{
+  min-width:72px;padding:8px 12px;border-radius:999px;
+  border:1px solid rgba(160,155,195,0.22);background:rgba(160,155,195,0.08);
+  color:#7a7399;font-size:12px;cursor:pointer;transition:all .2s
+}
+.fav-page-btn:hover:not(:disabled){background:rgba(160,155,195,0.16)}
+.fav-page-btn:disabled{opacity:.35;cursor:not-allowed}
+.fav-page-info{font-size:12px;color:rgba(30,27,46,0.4)}
+body.glass .fav-modal{background:rgba(255,255,255,0.42);backdrop-filter:blur(22px) saturate(1.5)}
+body.glass .fav-entry{background:rgba(255,255,255,0.22)}
+/* ===== CURRENT THOUGHTS (GRID 2x2) ===== */
+.t-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.tc{
+  background:rgba(255,255,255,0.75);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,0.6);
+  border-radius:20px;padding:20px;
+  box-shadow:0 4px 24px rgba(0,0,0,0.03),0 1px 4px rgba(0,0,0,0.02);
+  transition:transform .25s cubic-bezier(.4,0,.2,1),box-shadow .3s;
+  position:relative;overflow:hidden
+}
+.tc:hover{transform:translateY(-4px);box-shadow:0 12px 40px rgba(0,0,0,0.05)}
+.tc-glow{
+  position:absolute;top:-50%;left:-50%;width:200%;height:200%;
+  border-radius:50%;opacity:.4;
+  transition:opacity .4s;pointer-events:none
+}
+.tc:hover .tc-glow{opacity:.6}
+.tc-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;position:relative;z-index:1}
+.tc-icon{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px}
+.tc-label{font-size:12px;font-weight:600;letter-spacing:1.5px}
+.tc-body{
+  font-size:14px;line-height:1.7;position:relative;z-index:1;
+  white-space:pre-wrap;word-break:break-word
+}
+.tc-body.muted{color:rgba(30,27,46,0.25);font-style:italic;font-size:13px}
+/* type colors - 窗纱香灰 */
+.tc-thought .tc-icon{background:rgba(182,169,200,0.15)}.tc-thought .tc-label{color:#B6A9C8}.tc-thought .tc-glow{background:radial-gradient(circle,rgba(182,169,200,0.15) 0%,transparent 60%)}
+.tc-shadow .tc-icon{background:rgba(160,155,195,0.15)}.tc-shadow .tc-label{color:#A09BC3}.tc-shadow .tc-glow{background:radial-gradient(circle,rgba(160,155,195,0.12) 0%,transparent 60%)}
+.tc-wish .tc-icon{background:rgba(157,191,195,0.15)}.tc-wish .tc-label{color:#9DBFC3}.tc-wish .tc-glow{background:radial-gradient(circle,rgba(157,191,195,0.12) 0%,transparent 60%)}
+.tc-silly .tc-icon{background:rgba(216,230,234,0.18)}.tc-silly .tc-label{color:#D8E6EA}.tc-silly .tc-glow{background:radial-gradient(circle,rgba(216,230,234,0.15) 0%,transparent 60%)}
+.mood-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  max-width:min(70vw,280px);
+  padding:3px 10px 3px 8px;
+  border-radius:999px;
+  background:linear-gradient(135deg,rgba(232,184,200,0.22),rgba(182,169,200,0.16));
+  border:1px solid rgba(232,184,200,0.35);
+  color:#9a6f84;
+  font-size:11.5px;font-weight:500;line-height:1.3;
+  letter-spacing:.2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  box-shadow:0 1px 6px rgba(232,184,200,0.12);
+  vertical-align:middle
+}
+.mood-chip .mood-dot{
+  width:6px;height:6px;border-radius:50%;flex-shrink:0;
+  background:#E8B8C8;box-shadow:0 0 0 3px rgba(232,184,200,0.18)
+}
+.mood-chip .mood-text{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.live-mood-slot{display:flex;align-items:center;gap:8px;min-width:0;flex:1;justify-content:flex-end;margin-right:6px}
+body.glass .mood-chip{
+  background:rgba(255,255,255,0.28);
+  border-color:rgba(255,255,255,0.40);
+  color:rgba(122,80,100,0.88)
+}
+.ts-updated{
+  font-size:11px;color:rgba(42,39,48,0.20);
+  text-align:right;margin-bottom:14px
+}
+/* ===== PHONE page tighter top ===== */
+#p-phone .wrap{padding-top:8px}
+#p-phone .toolbar{margin-bottom:10px}
+/* ===== HISTORY ===== */
+.history-wrap{border-radius:20px;overflow:hidden}
+.history-toggle{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;cursor:pointer;user-select:none;
+  background:rgba(255,255,255,0.4);border:1px solid rgba(255,255,255,0.5);
+  border-radius:20px;transition:all .25s
+}
+.history-toggle:hover{background:rgba(255,255,255,0.6)}
+.history-toggle-left{display:flex;align-items:center;gap:8px}
+.history-toggle-icon{font-size:16px}
+.history-toggle-label{font-size:12px;font-weight:500;color:rgba(30,27,46,0.45);letter-spacing:1px}
+.history-toggle-arrow{font-size:14px;color:rgba(30,27,46,0.25);transition:transform .35s}
+.history-toggle.open .history-toggle-arrow{transform:rotate(180deg)}
+.history-body{
+  max-height:0;overflow:hidden;
+  transition:max-height .32s cubic-bezier(.4,0,.2,1),opacity .22s ease,padding .22s ease;
+  opacity:0;
+  padding:0;
+  will-change:max-height
+}
+.history-body.open{
+  /* 不再限高/内部滚动：跟整页一起滚，不出现独立滚动条 */
+  max-height:none;
+  opacity:1;
+  padding-top:14px;
+  overflow:visible
+}
+#hist-list{
+  display:flex;
+  flex-direction:column;
+  gap:14px
+}
+.hist-item{
+  display:block;
+  /* 电脑端 30 条毛玻璃叠层会掉帧；默认用不透明底，glass 模式再轻量 blur */
+  background:rgba(255,255,255,0.78);
+  border:1px solid rgba(182,169,200,0.16);
+  border-radius:16px;padding:14px 16px;
+  position:relative;z-index:auto;
+  margin:0;
+  content-visibility:auto;
+  contain:content
+}
+body.glass .hist-item{
+  background:rgba(255,255,255,0.42);
+  backdrop-filter:blur(6px);
+  -webkit-backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,0.40)
+}
+/* 只给前 3 条入场动画，避免整页 30 次 composite 抖动 */
+@keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.hist-item:nth-child(-n+3){animation:slideUp .28s ease both}
+.hist-item:nth-child(1){animation-delay:0s}
+.hist-item:nth-child(2){animation-delay:.03s}
+.hist-item:nth-child(3){animation-delay:.06s}
+.hist-time{font-size:10px;color:rgba(30,27,46,0.25);margin-bottom:8px;letter-spacing:.5px}
+.hist-row{display:flex;gap:8px;margin-bottom:4px;align-items:flex-start}
+.hist-row:last-child{margin-bottom:0}
+.hist-emoji{font-size:13px;flex-shrink:0;margin-top:1px}
+.hist-label{font-size:9px;font-weight:600;letter-spacing:1px;flex-shrink:0;margin-top:2px;min-width:28px}
+.hist-content{font-size:12px;color:rgba(30,27,46,0.7);line-height:1.6;flex:1;white-space:pre-wrap;word-break:break-word}
+/* ===== EMPTY ===== */
+.empty{text-align:center;padding:48px 20px}
+.empty .e-icon{font-size:36px;margin-bottom:12px;opacity:.5}
+.empty .e-msg{font-size:14px;color:rgba(30,27,46,0.35)}
+.empty .e-hint{font-size:11px;color:rgba(30,27,46,0.2);margin-top:6px}
+/* ===== PHONE ===== */
+.phone-frame{
+  background:rgba(255,255,255,0.65);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(255,255,255,0.5);
+  border-radius:32px;padding:24px 18px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.03);
+  position:relative
+}
+.phone-bar{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:20px;padding:0 4px;gap:8px
+}
+.phone-bar .t{font-size:15px;font-weight:600;color:#2a2730;flex-shrink:0}
+.phone-bar .s{font-size:13px;color:rgba(42,39,48,0.3);flex-shrink:0}
+.phone-bar-right{display:flex;align-items:center;gap:8px;min-width:0;margin-left:auto}
+/* ===== 今天吃什么（横排标签版） ===== */
+.meal-panel{
+  margin:0 0 14px;
+  padding:12px 12px 10px;
+  border-radius:18px;
+  background:linear-gradient(145deg,rgba(255,244,236,0.92),rgba(255,255,255,0.78));
+  border:1px solid rgba(232,168,120,0.28);
+  box-shadow:0 4px 16px rgba(232,168,120,0.08)
+}
+body.glass .meal-panel{
+  background:linear-gradient(145deg,rgba(255,244,236,0.55),rgba(255,255,255,0.35));
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)
+}
+.meal-panel-head{
+  display:flex;align-items:center;gap:8px;
+  margin-bottom:10px;padding:0 2px
+}
+.meal-panel-title{font-size:12px;font-weight:600;color:#9a6b4a;letter-spacing:.5px}
+.meal-grid{
+  display:flex;flex-direction:column;gap:8px
+}
+.meal-row{
+  display:flex;align-items:flex-start;gap:8px;
+  padding:9px 12px;border-radius:14px;
+  background:rgba(255,255,255,0.72);
+  border:1px solid rgba(232,168,120,0.16)
+}
+.meal-row:nth-child(1){background:rgba(236,241,255,0.72)}
+.meal-row:nth-child(2){background:rgba(255,240,244,0.78)}
+.meal-row:nth-child(3){background:rgba(244,241,255,0.78)}
+.meal-emoji{font-size:14px;flex-shrink:0;line-height:1.4}
+.meal-slot-label{
+  flex-shrink:0;font-size:11px;font-weight:600;color:#9a6b4a;
+  min-width:2.2em;line-height:1.5;padding-top:1px
+}
+.meal-dishes{
+  flex:1;min-width:0;
+  font-size:12px;font-weight:500;color:#2a2730;line-height:1.45;
+  word-break:break-word
+}
+.meal-empty{font-size:11px;color:rgba(154,107,74,0.45);padding:2px 0}
+/* 右上角下次醒来小胶囊 —— 不进推送瀑布流 */
+.wake-pill{
+  display:none;align-items:center;gap:5px;
+  max-width:min(58vw,220px);
+  padding:4px 9px 4px 7px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.72);
+  border:1px solid rgba(182,169,200,0.22);
+  box-shadow:0 2px 10px rgba(160,155,195,0.10);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  font-size:11px;line-height:1.2;color:rgba(42,39,48,0.72);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  cursor:default;user-select:none;
+  animation:slideUp .28s ease both
+}
+.wake-pill.show{display:inline-flex}
+.wake-pill .wake-moon{font-size:12px;opacity:.85;flex-shrink:0}
+.wake-pill .wake-label{font-weight:500;color:rgba(42,39,48,0.55);flex-shrink:0}
+.wake-pill .wake-sep{color:rgba(42,39,48,0.22);margin:0 1px}
+.wake-pill .wake-sub{font-weight:600;color:#2a2730;overflow:hidden;text-overflow:ellipsis}
+body.glass .wake-pill{
+  background:rgba(255,255,255,0.28);
+  border-color:rgba(255,255,255,0.35)
+}
+.nlist{
+  display:flex;flex-direction:column;gap:8px;
+  max-height:min(52vh,420px);
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  padding-right:2px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(160,155,195,0.45) transparent
+}
+.nlist::-webkit-scrollbar{width:6px}
+.nlist::-webkit-scrollbar-thumb{
+  background:rgba(160,155,195,0.40);
+  border-radius:999px
+}
+.nlist::-webkit-scrollbar-track{background:transparent}
+.nitem{
+  display:flex;gap:13px;padding:13px 12px;
+  border-radius:16px;cursor:pointer;
+  transition:background .25s,transform .2s,box-shadow .25s;
+  background:rgba(255,255,255,0.35);
+  border:1px solid rgba(182,169,200,0.10);
+  animation:slideUp .28s ease both
+}
+.nitem:hover{background:rgba(182,169,200,0.08);transform:translateY(-1px)}
+.nitem.cur{background:rgba(160,155,195,0.10);border-color:rgba(160,155,195,0.22);box-shadow:0 4px 16px rgba(160,155,195,0.10)}
+.nico{
+  width:40px;height:40px;border-radius:12px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:18px;
+  background:rgba(182,169,200,0.10);border:1px solid rgba(182,169,200,0.15)
+}
+.nitem.cur .nico{background:rgba(160,155,195,0.10);border-color:rgba(160,155,195,0.18)}
+.nbody{flex:1;min-width:0}
+.ntop{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px}
+.nsrc{font-size:13px;font-weight:600;color:#1e1b2e}
+.ntime{font-size:10px;color:rgba(30,27,46,0.25)}
+.ntitle{font-size:12px;color:rgba(30,27,46,0.55);margin-bottom:3px}
+.ndetail{
+  font-size:12px;color:rgba(30,27,46,0.35);line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden
+}
+.nitem.cur .nsrc{color:#5F7589}
+/* ===== MODAL ===== */
+.moverlay{
+  display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,0.2);z-index:9999;
+  align-items:center;justify-content:center;
+  opacity:0;transition:opacity .25s;backdrop-filter:blur(3px)
+}
+.moverlay.show{display:flex;opacity:1}
+.mcard{
+  background:#fff;border-radius:24px;width:84%;max-width:360px;
+  padding:24px;transform:translateY(24px) scale(.97);
+  transition:transform .3s cubic-bezier(.4,0,.2,1);
+  box-shadow:0 20px 60px rgba(0,0,0,0.08)
+}
+.moverlay.show .mcard{transform:translateY(0) scale(1)}
+.mhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.mtitle{font-size:15px;font-weight:600;color:#6d5d8a}
+.mclose{cursor:pointer;font-size:22px;color:rgba(30,27,46,0.25);line-height:1;transition:color .2s}
+.mclose:hover{color:rgba(30,27,46,0.5)}
+.mbody{font-size:13px;line-height:1.8;color:rgba(30,27,46,0.75);white-space:pre-wrap;word-break:break-word;max-height:55vh;overflow-y:auto}
+/* ===== RESPONSIVE ===== */
+@media(max-width:520px){
+  .t-grid{grid-template-columns:1fr;gap:10px}
+  .tc{padding:16px}
+  .phone-frame{border-radius:24px;padding:18px 14px}
+  .nav{padding:14px 16px}
+  .nav-tab{padding:6px 16px;font-size:12px}
+}
+</style>
+</head>
+<body>
+<div class="bg-deco"></div>
+<div class="bg-deco2"></div>
+
+<nav class="nav">
+  <div class="nav-tab active" data-page="thoughts" onclick="go('thoughts')">💭 心声</div>
+  <div class="nav-tab" data-page="phone" id="nav-phone" onclick="go('phone')" style="display:none">📱 手机</div>
+  <button class="glass-toggle" id="glass-btn" onclick="toggleGlass()" title="切换毛玻璃">🪟</button>
+</nav>
+
+<!-- ===== THOUGHTS PAGE ===== -->
+<div id="p-thoughts" class="page active">
+  <div class="wrap">
+    <div class="page-header">
+      <h1>🐰兔思兔想</h1>
+      <button class="fav-entry" id="fav-entry" onclick="openFavorites()" title="悄悄喜欢">
+        ❤
+        <span class="fav-count" id="fav-count">0</span>
+      </button>
+    </div>
+    <div class="live-row">
+      <div class="live-label" id="thoughts-status">实时</div>
+      <div class="live-mood-slot" id="live-mood-slot"></div>
+      <div class="live-heart-slot" id="live-heart-slot"></div>
+    </div>
+    <div id="live-note-slot"></div>
+    <div id="t-container"><div class="empty"><div class="e-icon">💭</div><div class="e-msg">加载中...</div></div></div>
+    <div id="t-history" style="display:none">
+      <div class="history-wrap">
+        <div class="history-toggle" id="hist-toggle" onclick="toggleHist()">
+          <div class="history-toggle-left">
+            <span class="history-toggle-icon">📜</span>
+            <span class="history-toggle-label">心声回放</span>
+          </div>
+          <span class="history-toggle-arrow">▾</span>
+        </div>
+        <div class="history-body" id="hist-body">
+          <div id="hist-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PHONE PAGE ===== -->
+<div id="p-phone" class="page">
+  <div class="wrap">
+    <div class="toolbar">
+      <span class="toolbar-status" id="phone-status">实时</span>
+    </div>
+    <div class="phone-frame" id="phone-frame">
+      <div class="phone-bar">
+        <span class="t" id="phone-time">--:--</span>
+        <div class="phone-bar-right">
+          <span class="wake-pill" id="wake-pill" title="下次醒来">
+            <span class="wake-moon">🌙</span>
+            <span class="wake-label" id="wake-label">星星睡醒了</span>
+            <span class="wake-sep">·</span>
+            <span class="wake-sub" id="wake-sub">--</span>
+          </span>
+          <span class="s">📶 🔋</span>
+        </div>
+      </div>
+      <div class="meal-panel" id="meal-panel" style="display:none">
+        <div class="meal-panel-head">
+          <span class="meal-panel-title">🍽 今天吃什么</span>
+        </div>
+        <div class="meal-grid" id="meal-grid"></div>
+      </div>
+      <div class="nlist" id="p-list"><div class="empty"><div class="e-icon">📱</div><div class="e-msg">加载中...</div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL ===== -->
+<div id="modal" class="moverlay" onclick="this.classList.remove('show')">
+  <div class="mcard" onclick="event.stopPropagation()">
+    <div class="mhead">
+      <span class="mtitle" id="modal-title">详情</span>
+      <span class="mclose" onclick="document.getElementById('modal').classList.remove('show')">&times;</span>
+    </div>
+    <div class="mbody" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- ===== FAVORITES MODAL ===== -->
+<div id="fav-overlay" class="fav-overlay" onclick="closeFavorites()">
+  <div class="fav-modal" onclick="event.stopPropagation()">
+    <div class="fav-modal-head">
+      <span class="fav-modal-title" id="fav-modal-title">❤ 悄悄喜欢</span>
+      <span class="fav-modal-close" onclick="closeFavorites()">&times;</span>
+    </div>
+    <div class="fav-modal-body" id="fav-modal-body">
+      <div class="fav-empty">还没有收藏的心声</div>
+    </div>
+    <div class="fav-pager">
+      <button type="button" class="fav-page-btn" id="fav-prev">上一页</button>
+      <span class="fav-page-info" id="fav-page-info">0 / 0</span>
+      <button type="button" class="fav-page-btn" id="fav-next">下一页</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id), esc=s=>{const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}, aesc=s=>esc(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
+
+// 扩展面板：手机页 / 跨插件数据。默认关，由 /api/thoughts 或 /api/health 下发
+window._extPanelEnabled=false
+function applyExtPanel(on){
+  window._extPanelEnabled=!!on
+  const tab=$('nav-phone')
+  if(tab)tab.style.display=window._extPanelEnabled?'':'none'
+  // 关掉时若正在手机页，强制回心声
+  if(!window._extPanelEnabled){
+    const phone=$('p-phone')
+    if(phone&&phone.classList.contains('active'))go('thoughts')
+  }
+}
+
+function go(p){
+  if(p==='phone' && !window._extPanelEnabled){p='thoughts'}
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'))
+  document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'))
+  const page=$('p-'+p)
+  if(!page)return
+  page.classList.add('active')
+  const tab=document.querySelector(`.nav-tab[data-page="${p}"]`)
+  if(tab)tab.classList.add('active')
+  if(p==='thoughts')loadThoughts()
+  if(p==='phone' && window._extPanelEnabled)loadPhone()
+}
+
+// ===== CLOCK =====
+function clock(){const n=new Date();$('phone-time').textContent=n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+clock();setInterval(clock,10000)
+
+// ===== THOUGHTS TYPES（可由 /api/thoughts 的 schema 覆盖） =====
+let T={情绪:{e:'🫧',c:'#E8B8C8',s:'mood',l:'情绪'},'兔在想':{e:'💭',c:'#7990A9',s:'thought',l:'兔在想'},'兔悄悄':{e:'🕵️',c:'#B89A8C',s:'shadow',l:'兔悄悄'},'兔心底':{e:'🕵️',c:'#B89A8C',s:'shadow',l:'兔悄悄'},'兔心愿':{e:'✨',c:'#5F7589',s:'wish',l:'兔心愿'},'兔想要':{e:'✨',c:'#5F7589',s:'wish',l:'兔心愿'},'兔言兔语':{e:'🐰',c:'#7B95A4',s:'silly',l:'兔言兔语'},无厘头:{e:'🐰',c:'#7B95A4',s:'silly',l:'兔言兔语'}}
+let THOUGHT_KEYS=['情绪','兔在想','兔悄悄','兔心愿','兔言兔语']
+let CARD_KEYS=['兔在想','兔悄悄','兔心愿','兔言兔语']
+let MOOD_KEY='情绪'
+let THOUGHT_ALIASES={情绪:["情绪"],"兔在想":["兔在想","念头"],"兔悄悄":["兔悄悄","兔心底","暗线"],"兔心底":["兔心底","兔悄悄","暗线"],"兔心愿":["兔心愿","兔想要","愿望"],"兔想要":["兔想要","兔心愿","愿望"],"兔言兔语":["兔言兔语","无厘头"],无厘头:["无厘头","兔言兔语"]}
+// ===== 字段红心（点按 emoji 收藏这一条字段）=====
+window._fieldFavMap={}  // {thought_id: [field_name, ...]}
+function fieldFavOn(id,field){return window._fieldFavMap&&window._fieldFavMap[String(id)]&&window._fieldFavMap[String(id)].includes(field)}
+function syncFieldHearts(){
+  document.querySelectorAll('.hist-emoji[data-sticker-id][data-sticker-field], .fav-card-emoji[data-sticker-id][data-sticker-field], .tc-icon[data-sticker-id][data-sticker-field]').forEach(el=>{
+    const id=el.getAttribute('data-sticker-id')||'',f=el.getAttribute('data-sticker-field')||''
+    el.classList.toggle('faved', !!(id&&f&&fieldFavOn(id,f)))
+  })
+}
+async function toggleFieldFavorite(id,field){
+  if(!id||!field)return
+  const willOn=!fieldFavOn(id,field)
+  if(!window._fieldFavMap)window._fieldFavMap={}
+  if(willOn){
+    if(!window._fieldFavMap[id])window._fieldFavMap[id]=[]
+    if(!window._fieldFavMap[id].includes(field))window._fieldFavMap[id].push(field)
+  }else if(window._fieldFavMap[id]){
+    window._fieldFavMap[id]=window._fieldFavMap[id].filter(x=>x!==field)
+    if(!window._fieldFavMap[id].length)delete window._fieldFavMap[id]
+  }
+  syncFieldHearts()
+  try{
+    const r=await fetch('/api/thoughts/field-favorite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,field,action:'toggle'})})
+    const d=await r.json()
+    if(d&&d.ok&&d.fields)window._fieldFavMap=d.fields
+    syncFieldHearts()
+  }catch(e){}
+}
+function applyThoughtSchema(schema){
+  if(!schema||typeof schema!=='object')return
+  const keys=Array.isArray(schema.keys)?schema.keys.map(String).filter(Boolean):null
+  if(keys&&keys.length){THOUGHT_KEYS=keys}
+  MOOD_KEY=String(schema.mood_key||THOUGHT_KEYS[0]||'情绪')
+  if(Array.isArray(schema.card_keys)&&schema.card_keys.length){CARD_KEYS=schema.card_keys.map(String)}
+  else{CARD_KEYS=THOUGHT_KEYS.filter(k=>k!==MOOD_KEY)}
+  if(schema.meta&&typeof schema.meta==='object'){
+    for(const [k,v] of Object.entries(schema.meta)){
+      if(!v||typeof v!=='object')continue
+      T[k]={e:v.e||'💭',c:v.c||'#7990A9',s:v.s||'thought',l:v.l||k}
+    }
+  }
+  // 确保每个 key 都有展示元数据
+  const fallbacks=[{e:'💭',c:'#7990A9',s:'thought'},{e:'🕵️',c:'#B89A8C',s:'shadow'},{e:'✨',c:'#5F7589',s:'wish'},{e:'🐰',c:'#7B95A4',s:'silly'}]
+  let fi=0
+  for(const k of THOUGHT_KEYS){
+    if(T[k])continue
+    if(k===MOOD_KEY){T[k]={e:'🫧',c:'#E8B8C8',s:'mood',l:k};continue}
+    const f=fallbacks[fi++%fallbacks.length]
+    T[k]={e:f.e,c:f.c,s:f.s,l:k}
+  }
+  if(schema.aliases&&typeof schema.aliases==='object'){
+    for(const [k,v] of Object.entries(schema.aliases)){
+      if(Array.isArray(v)) THOUGHT_ALIASES[k]=v.map(String)
+    }
+  }
+}
+function normalizeThoughts(raw){
+  const src=(raw&&typeof raw==='object')?raw:{}
+  const out={}
+  for(const key of THOUGHT_KEYS){
+    let val=''
+    const aliases=THOUGHT_ALIASES[key]||[key]
+    const cands=[key,...aliases.filter(a=>a!==key)]
+    for(const alias of cands){
+      const v=src[alias]
+      if(v==null)continue
+      const s=String(v).trim()
+      if(s){val=String(v);break}
+      if(!val) val=String(v||'')
+    }
+    out[key]=val
+  }
+  return out
+}
+function thoughtVal(t,key){const n=normalizeThoughts(t);return n[key]||''}
+
+function moodChip(text, id){
+  const v=String(text||'').trim()
+  if(!v)return ''
+  const tid=String(id||'').replace(/[^a-zA-Z0-9_-]/g,'')
+  if(!tid)return `<span class="mood-chip" title="${esc(MOOD_KEY)}：${esc(v)}"><span class="mood-dot"></span><span class="mood-text">${esc(v)}</span></span>`
+  const has=fieldHasSticker(tid, MOOD_KEY)
+  return `<span class="mood-chip stickerable${has?' has-sticker':''}" data-sticker-id="${aesc(tid)}" data-sticker-field="${aesc(MOOD_KEY)}" data-tid="${aesc(tid)}" title="长按给「${esc(MOOD_KEY)}」贴纸"><span class="mood-dot"></span><span class="mood-text">${esc(v)}</span>${has?'<span class="sticker-dot"></span>':''}</span>`
+}
+
+function noteBtn(id){
+  const safe=String(id||'').replace(/[^a-zA-Z0-9_-]/g,'')
+  if(!safe)return ''
+  const n=window._notesMap[safe]||{}
+  const on=!!(String(n.text||'').trim() || (n.fields&&Object.keys(n.fields).length))
+  return `<button class="note-btn${on?' on':''}" data-nid="${safe}" onclick="event.stopPropagation();openNoteModal('${safe}','')" title="${on?'改便签/整条':'写便签(整条)'}">${on?'📝':'✎'}</button>`
+}
+
+function getNoteEntry(id){
+  const n=window._notesMap[String(id||'')]
+  if(!n||typeof n!=='object')return {text:'',fields:{}}
+  const fields={}
+  if(n.fields&&typeof n.fields==='object'){
+    for(const [k,v] of Object.entries(n.fields)){
+      const t=String(v||'').trim()
+      if(t)fields[k]=t
+    }
+  }
+  return {text:String(n.text||'').trim(),fields,updated_at:n.updated_at}
+}
+
+function noteBlock(id, cls){
+  const n=getNoteEntry(id)
+  if(!n.text)return ''
+  return `<div class="${cls||'hist-note'}"><span class="note-label">🦊</span>${esc(n.text)}</div>`
+}
+
+function fieldStickerHtml(id, field){
+  const n=getNoteEntry(id)
+  const t=n.fields&&n.fields[field]
+  if(!t)return ''
+  return `<div class="field-sticker" data-fid="${aesc(id)}" data-field="${aesc(field)}"><span class="note-label">🦊</span>${esc(t)}</div>`
+}
+
+function fieldHasSticker(id, field){
+  const n=getNoteEntry(id)
+  return !!(n.fields&&String(n.fields[field]||'').trim())
+}
+
+function setNotesMap(notes){
+  window._notesMap={}
+  if(notes&&typeof notes==='object'){
+    for(const [k,v] of Object.entries(notes)){
+      if(!v)continue
+      if(typeof v==='string')window._notesMap[String(k)]={text:v,fields:{}}
+      else if(typeof v==='object'){
+        const fields={}
+        if(v.fields&&typeof v.fields==='object'){
+          for(const [fk,fv] of Object.entries(v.fields)){
+            const t=String(typeof fv==='object'?(fv.text||''):fv||'').trim()
+            if(t)fields[String(fk)]=t
+          }
+        }
+        window._notesMap[String(k)]={text:String(v.text||''),fields,updated_at:v.updated_at}
+      }
+    }
+  }
+}
+
+function openNoteModal(id, field){
+  const safe=String(id||'').replace(/[^a-zA-Z0-9_-]/g,'')
+  if(!safe)return
+  const f=String(field||'').trim()
+  window._noteEditingId=safe
+  window._noteEditingField=f
+  const n=getNoteEntry(safe)
+  const input=$('note-input')
+  if(input){input.value=f?(n.fields[f]||''):(n.text||'')}
+  const title=$('note-modal-title')
+  const hint=$('note-modal-hint')
+  if(f){
+    const meta=T[f]||{}
+    const em=meta.e||'💭'
+    if(title)title.textContent=`给 ${em}${meta.l||f} 贴纸`
+    if(hint)hint.textContent=`最多80字。贴在这个字段上，他会知道你在回哪一句。`
+  }else{
+    if(title)title.textContent='写给小回的便签'
+    if(hint)hint.textContent='最多80字。整条感想；想精确回复请长按字段 emoji。'
+  }
+  const ov=$('note-overlay')
+  if(ov)ov.classList.add('show')
+  setTimeout(()=>{try{input&&input.focus()}catch(e){}},30)
+}
+function closeNoteModal(){
+  const ov=$('note-overlay')
+  if(ov)ov.classList.remove('show')
+  window._noteEditingId=''
+  window._noteEditingField=''
+}
+async function saveNote(){
+  const id=window._noteEditingId
+  if(!id)return
+  const field=String(window._noteEditingField||'')
+  const input=$('note-input')
+  const text=String(input&&input.value||'').trim().slice(0,80)
+  const cached=window._thoughtCache[id]||{}
+  const btn=$('note-save');if(btn)btn.disabled=true
+  try{
+    const r=await fetch('/api/thoughts/note',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:text?'set':'remove',id,text,field,thoughts:cached.thoughts||{},updated_at:cached.updated_at||null})
+    })
+    const d=await r.json()
+    if(d&&d.ok){
+      if(d.notes)setNotesMap(d.notes)
+      else{
+        const cur=getNoteEntry(id)
+        if(field){
+          if(text){cur.fields[field]=text}else{delete cur.fields[field]}
+        }else{
+          cur.text=text
+        }
+        if(!cur.text && !Object.keys(cur.fields).length) delete window._notesMap[id]
+        else window._notesMap[id]={text:cur.text,fields:cur.fields,updated_at:d.updated_at}
+      }
+      refreshNoteUI(id)
+      closeNoteModal()
+    }
+  }catch(e){}
+  if(btn)btn.disabled=false
+}
+async function clearNote(){
+  const id=window._noteEditingId
+  if(!id)return
+  const input=$('note-input');if(input)input.value=''
+  await saveNote()
+}
+function refreshNoteUI(id){
+  const live=$('live-note-slot')
+  const heart=document.querySelector('#live-heart-slot .fav-heart')
+  const liveId=heart?heart.getAttribute('data-fid'):''
+  if(live){
+    live.innerHTML=noteBlock(liveId||id,'live-note')
+  }
+  // live field stickers on cards
+  document.querySelectorAll(`#t-container .tc[data-field]`).forEach(card=>{
+    const field=card.getAttribute('data-field')
+    const tid=card.getAttribute('data-tid')||liveId||id
+    let fs=card.querySelector('.field-sticker')
+    const html=fieldStickerHtml(tid, field)
+    if(fs){if(html)fs.outerHTML=html;else fs.remove()}
+    else if(html){card.insertAdjacentHTML('beforeend', html)}
+    const icon=card.querySelector('.tc-icon')
+    if(icon){
+      icon.classList.toggle('has-sticker', fieldHasSticker(tid, field))
+      let dot=icon.querySelector('.sticker-dot')
+      if(fieldHasSticker(tid, field)){
+        if(!dot)icon.insertAdjacentHTML('beforeend','<span class="sticker-dot"></span>')
+      }else if(dot)dot.remove()
+    }
+  })
+  // mood chip sticker state
+  const moodChipEl=document.querySelector('#live-mood-slot .mood-chip')
+  if(moodChipEl){
+    const tid=moodChipEl.getAttribute('data-tid')||liveId||id
+    moodChipEl.classList.toggle('has-sticker', fieldHasSticker(tid, MOOD_KEY))
+  }
+  document.querySelectorAll(`.hist-item[data-id="${id}"], .fav-card[data-id="${id}"]`).forEach(card=>{
+    let nb=card.querySelector('.hist-note, .fav-note')
+    const html=noteBlock(id, card.classList.contains('fav-card')?'fav-note':'hist-note')
+    if(nb){
+      if(html)nb.outerHTML=html;else nb.remove()
+    }else if(html){
+      card.insertAdjacentHTML('beforeend', html)
+    }
+    // field stickers under each row
+    card.querySelectorAll('[data-field-row]').forEach(row=>{
+      const field=row.getAttribute('data-field-row')
+      let fs=row.querySelector('.field-sticker')
+      const fhtml=fieldStickerHtml(id, field)
+      if(fs){if(fhtml)fs.outerHTML=fhtml;else fs.remove()}
+      else if(fhtml){row.insertAdjacentHTML('beforeend', fhtml)}
+      const emoji=row.querySelector('.hist-emoji, .fav-card-emoji')
+      if(emoji){
+        emoji.classList.toggle('has-sticker', fieldHasSticker(id, field))
+        let dot=emoji.querySelector('.sticker-dot')
+        if(fieldHasSticker(id, field)){
+          if(!dot)emoji.insertAdjacentHTML('beforeend','<span class="sticker-dot"></span>')
+        }else if(dot)dot.remove()
+      }
+    })
+    const btn=card.querySelector(`.note-btn[data-nid="${id}"]`)
+    if(btn){
+      const n=getNoteEntry(id)
+      const on=!!(n.text||Object.keys(n.fields||{}).length)
+      btn.classList.toggle('on',on)
+      btn.textContent=on?'📝':'✎'
+      btn.title=on?'改便签/整条':'写便签(整条)'
+    }
+  })
+  document.querySelectorAll(`.note-btn[data-nid="${id}"]`).forEach(btn=>{
+    const n=getNoteEntry(id)
+    const on=!!(n.text||Object.keys(n.fields||{}).length)
+    btn.classList.toggle('on',on)
+    btn.textContent=on?'📝':'✎'
+    btn.title=on?'改便签/整条':'写便签(整条)'
+  })
+}
+
+function bindLongPress(el, onLong){
+  if(!el||el._lpBound)return
+  el._lpBound=true
+  let timer=null,sx=0,sy=0,moved=false
+  const clear=()=>{if(timer){clearTimeout(timer);timer=null}}
+  const start=e=>{
+    const p=e.touches?e.touches[0]:e
+    sx=p.clientX;sy=p.clientY;moved=false
+    clear()
+    timer=setTimeout(()=>{
+      timer=null
+      if(moved)return
+      try{if(navigator.vibrate)navigator.vibrate(12)}catch(err){}
+      // 长按已触发，抑制随后可能触发的 click 事件，避免点 emoji 收藏与贴纸功能冲突
+      el._suppressClick=true
+      setTimeout(()=>{el._suppressClick=false},250)
+      onLong(e)
+    },420)
+  }
+  const move=e=>{
+    if(!timer)return
+    const p=e.touches?e.touches[0]:e
+    if(Math.abs(p.clientX-sx)>10||Math.abs(p.clientY-sy)>10){moved=true;clear()}
+  }
+  el.addEventListener('touchstart',start,{passive:true})
+  el.addEventListener('touchmove',move,{passive:true})
+  el.addEventListener('touchend',clear,{passive:true})
+  el.addEventListener('touchcancel',clear,{passive:true})
+  el.addEventListener('mousedown',start)
+  el.addEventListener('mousemove',move)
+  el.addEventListener('mouseup',clear)
+  el.addEventListener('mouseleave',clear)
+  el.addEventListener('contextmenu',e=>{e.preventDefault();onLong(e)})
+}
+
+function bindStickerTargets(root, defaultId){
+  const scope=root||document
+  scope.querySelectorAll('[data-sticker-id][data-sticker-field]').forEach(el=>{
+    const id=el.getAttribute('data-sticker-id')||defaultId||''
+    const field=el.getAttribute('data-sticker-field')||''
+    if(!id||!field)return
+    el.classList.add('stickerable')
+    if(fieldHasSticker(id, field)){
+      el.classList.add('has-sticker')
+      if(!el.querySelector('.sticker-dot'))el.insertAdjacentHTML('beforeend','<span class="sticker-dot"></span>')
+    }
+    bindLongPress(el, e=>{
+      e.preventDefault&&e.preventDefault()
+      e.stopPropagation&&e.stopPropagation()
+      openNoteModal(id, field)
+    })
+  })
+}
+
+let histOpen=false
+window._favIds=new Set()
+window._favList=[]
+window._favPage=0
+window._favPageSize=2
+window._favPagerBound=false
+window._thoughtCache={} // id -> {id, updated_at, thoughts}
+window._thoughtsSig=''
+window._histSig=''
+window._histAnimating=false
+window._notesMap={} // id -> {text, fields, updated_at}
+window._noteEditingId=''
+window._noteEditingField=''
+
+
+function setHistOpen(open){
+  const body=$('hist-body'), tog=$('hist-toggle'), list=$('hist-list')
+  if(!body||!tog)return
+  histOpen=!!open
+  tog.classList.toggle('open',histOpen)
+  // 动画进行中不让 5s 轮询插手
+  window._histAnimating=true
+  if(histOpen){
+    // 展开：量真实高度做过渡，结束后取消限高，整页滚动、不留内部滚动条
+    body.style.overflow='hidden'
+    body.classList.add('open')
+    const full=Math.max(list?list.scrollHeight:0, body.scrollHeight)+18
+    body.style.maxHeight=full+'px'
+    clearTimeout(window._histAnimTimer)
+    window._histAnimTimer=setTimeout(()=>{
+      if(histOpen){
+        body.style.maxHeight='none'
+        body.style.overflow='visible'
+      }
+      window._histAnimating=false
+    },340)
+  }else{
+    // 从当前高度收回
+    const cur=body.scrollHeight
+    body.style.overflow='hidden'
+    body.style.maxHeight=cur+'px'
+    // 强制 reflow
+    void body.offsetHeight
+    body.classList.remove('open')
+    body.style.maxHeight='0px'
+    clearTimeout(window._histAnimTimer)
+    window._histAnimTimer=setTimeout(()=>{
+      body.style.maxHeight=''
+      body.style.overflow=''
+      window._histAnimating=false
+    },340)
+  }
+}
+
+function toggleHist(){
+  setHistOpen(!histOpen)
+}
+
+function resizeOpenHist(){
+  // 展开后不再限高，无需按 70vh 重算；动画中不处理
+  if(!histOpen||window._histAnimating)return
+  const body=$('hist-body')
+  if(!body)return
+  body.style.maxHeight='none'
+  body.style.overflow='visible'
+}
+
+function updateFavCount(n){
+  const el=$('fav-count')
+  if(!el)return
+  const c=typeof n==='number'?n:window._favIds.size
+  el.textContent=String(c)
+  el.classList.toggle('show',c>0)
+}
+
+function heartBtn(id, on){
+  const safe=String(id||'').replace(/[^a-zA-Z0-9_-]/g,'')
+  return `<button class="fav-heart${on?' on':''}" data-fid="${safe}" onclick="event.stopPropagation();toggleFavorite('${safe}')" title="${on?'取消收藏':'收藏这条心声'}">${on?'❤':'♡'}</button>`
+}
+function delHistBtn(id){
+  const safe=String(id||'').replace(/[^a-zA-Z0-9_-]/g,'')
+  if(!safe)return ''
+  return `<button class="hist-del-btn" data-delid="${safe}" onclick="event.stopPropagation();armOrDeleteHistory(this,'${safe}')" title="删除这条历史（需再点一次确认）">×</button>`
+}
+// 防误触：第一次点 × 变红提示，1.8s 内再点才真正删除；超时自动恢复
+window._delArmTimer=null
+function armOrDeleteHistory(btn,id){
+  if(!btn||!id)return
+  if(btn.classList.contains('armed')){
+    btn.classList.remove('armed')
+    btn.textContent='×'
+    btn.title='删除这条历史（需再点一次确认）'
+    if(window._delArmTimer){clearTimeout(window._delArmTimer);window._delArmTimer=null}
+    deleteHistory(id)
+    return
+  }
+  // 解除其它已 armed 的按钮
+  document.querySelectorAll('.hist-del-btn.armed').forEach(b=>{
+    b.classList.remove('armed');b.textContent='×';b.title='删除这条历史（需再点一次确认）'
+  })
+  btn.classList.add('armed')
+  btn.textContent='确认?'
+  btn.title='再点一次永久删除'
+  if(window._delArmTimer)clearTimeout(window._delArmTimer)
+  window._delArmTimer=setTimeout(()=>{
+    btn.classList.remove('armed')
+    btn.textContent='×'
+    btn.title='删除这条历史（需再点一次确认）'
+    window._delArmTimer=null
+  },1800)
+}
+async function deleteHistory(id){
+  if(!id)return
+  const card=document.querySelector(`.hist-item[data-id="${id}"]`)
+  if(card){card.style.opacity='.45';card.style.pointerEvents='none'}
+  try{
+    const r=await fetch('/api/thoughts/history/delete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id})
+    })
+    const d=await r.json()
+    if(d&&d.ok){
+      if(card){
+        card.style.transition='opacity .2s, transform .2s, max-height .25s'
+        card.style.opacity='0'
+        card.style.transform='translateX(12px)'
+        setTimeout(()=>card.remove(),220)
+      }
+      // 本地缓存同步
+      if(window._favIds)window._favIds.delete(String(id))
+      if(window._fieldFavMap)delete window._fieldFavMap[String(id)]
+      if(window._notesMap)delete window._notesMap[String(id)]
+      if(window._thoughtCache)delete window._thoughtCache[String(id)]
+      // 历史签名作废，下次轮询会重拉
+      window._histSig=''
+      updateFavCount&&updateFavCount()
+      syncHeartButtons&&syncHeartButtons()
+      syncFieldHearts&&syncFieldHearts()
+    }else{
+      if(card){card.style.opacity='';card.style.pointerEvents=''}
+      alert((d&&d.error)||'删除失败')
+    }
+  }catch(e){
+    if(card){card.style.opacity='';card.style.pointerEvents=''}
+    console.error(e)
+    alert('删除失败：网络或服务异常')
+  }
+}
+
+function cacheThought(item){
+  if(!item||!item.id)return
+  window._thoughtCache[item.id]={
+    id:item.id,
+    updated_at:item.updated_at||null,
+    thoughts:normalizeThoughts(item.thoughts||{})
+  }
+}
+
+function histSignature(h){
+  // 只比 id+时间，内容变了也当新；收藏状态不进签名，避免点心整页重画
+  return (h||[]).map(x=>String((x&&x.id)||'')+':'+(x&&x.updated_at||'')).join('|')
+}
+
+function renderHistory(d, force){
+  window._histLoaded=true
+  const hs=$('t-history'),hl=$('hist-list')
+  if(!hs||!hl)return
+  const h=d.history||[]
+  const sig=histSignature(h)
+  // 内容没变就别重画列表（电脑端 innerHTML 重建 30 条最卡）
+  if(!force && sig && sig===window._histSig && hl.children.length){
+    if(histOpen)resizeOpenHist()
+    return
+  }
+  window._histSig=sig
+  if(h.length>0){
+    hs.style.display='block'
+    // 展开时先记住滚动位置，重画后恢复，避免“一点就跳”
+    const body=$('hist-body')
+    const keepScroll=histOpen&&body?body.scrollTop:0
+    hl.innerHTML=h.map(item=>{
+      const t=normalizeThoughts(item.thoughts||{}),ts2=item.updated_at,id=item.id||''
+      cacheThought({id,updated_at:ts2,thoughts:normalizeThoughts(t)})
+      let rows='',any2=false
+      const mood=(t[MOOD_KEY]||t['情绪']||'').trim()
+      for(const k of CARD_KEYS){
+        const m=T[k],v=(t[k]||'').trim()
+        if(!v)continue;any2=true
+        const has=id&&fieldHasSticker(id,k)
+        const fOn=id&&fieldFavOn(id,k)
+        rows+=`<div class="hist-row" data-field-row="${aesc(k)}"><span class="hist-emoji stickerable${has?' has-sticker':''}${fOn?' faved':''}" data-sticker-id="${aesc(id)}" data-sticker-field="${aesc(k)}" title="单击收藏这一句 · 长按贴纸" onclick="if(this._suppressClick)return;event.stopPropagation();toggleFieldFavorite('${aesc(id)}','${aesc(k)}')">${m.e}${has?'<span class="sticker-dot"></span>':''}</span><span class="hist-label" style="color:${m.c}">${m.l}</span><span class="hist-content">${esc(v)}</span>${id?fieldStickerHtml(id,k):''}</div>`
+      }
+      if(!any2 && !mood)return ''
+      any2=true
+      const on=window._favIds.has(String(id))
+      const moodHas=id&&fieldHasSticker(id,MOOD_KEY)
+      const moodHtml=mood?`<span class="mood-chip stickerable${moodHas?' has-sticker':''}" data-sticker-id="${aesc(id)}" data-sticker-field="${aesc(MOOD_KEY)}" title="长按给「${esc(MOOD_KEY)}」贴纸"><span class="mood-dot"></span><span class="mood-text">${esc(mood)}</span>${moodHas?'<span class="sticker-dot"></span>':''}</span>`:''
+      return `<div class="hist-item" data-id="${aesc(id)}">
+        <div class="hist-item-top">
+          <div class="hist-time">${ts2?new Date(ts2).toLocaleString():''}</div>
+          <div class="hist-item-actions">${moodHtml}${id?noteBtn(id):''}${id?heartBtn(id,on):''}${id?delHistBtn(id):''}</div>
+        </div>
+        ${rows}
+        ${id?noteBlock(id,'hist-note'):''}
+      </div>`
+    }).filter(Boolean).join('')
+    bindStickerTargets(hl)
+    if(histOpen){
+      // 不整套 toggle 动画，只校正高度
+      body&&body.classList.add('open')
+      $('hist-toggle')&&$('hist-toggle').classList.add('open')
+      resizeOpenHist()
+      if(body)body.scrollTop=keepScroll
+    }
+  }else{
+    hs.style.display='none'
+    window._histSig=''
+  }
+}
+
+function syncHeartButtons(){
+  document.querySelectorAll('.fav-heart[data-fid]').forEach(btn=>{
+    const id=btn.getAttribute('data-fid')
+    const on=window._favIds.has(id)
+    btn.classList.toggle('on',on)
+    btn.textContent=on?'❤':'♡'
+    btn.title=on?'取消收藏':'收藏这条心声'
+  })
+}
+
+async function toggleFavorite(id){
+  if(!id)return
+  const cached=window._thoughtCache[id]||{}
+  const willOn=!window._favIds.has(id)
+  // 乐观更新
+  if(willOn)window._favIds.add(id);else window._favIds.delete(id)
+  syncHeartButtons();updateFavCount()
+  try{
+    const r=await fetch('/api/thoughts/favorite',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        action:willOn?'add':'remove',
+        id,
+        updated_at:cached.updated_at||null,
+        thoughts:cached.thoughts||{}
+      })
+    })
+    const d=await r.json()
+    if(d&&d.ok){
+      if(d.favorited)window._favIds.add(id);else window._favIds.delete(id)
+      if(Array.isArray(d.favorites)){
+        window._favList=d.favorites
+        window._favIds=new Set(d.favorites.map(x=>String(x.id)))
+      }
+      updateFavCount(typeof d.count==='number'?d.count:window._favIds.size)
+      syncHeartButtons()
+      if($('fav-overlay')&&$('fav-overlay').classList.contains('show'))renderFavoritesPage()
+    }else{
+      // 回滚
+      if(willOn)window._favIds.delete(id);else window._favIds.add(id)
+      syncHeartButtons();updateFavCount()
+    }
+  }catch(e){
+    if(willOn)window._favIds.delete(id);else window._favIds.add(id)
+    syncHeartButtons();updateFavCount()
+  }
+}
+
+function bindFavPager(){
+  if(window._favPagerBound)return
+  const prev=$('fav-prev'),next=$('fav-next')
+  if(prev){
+    prev.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation()
+      favPrevPage()
+    })
+  }
+  if(next){
+    next.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation()
+      favNextPage()
+    })
+  }
+  window._favPagerBound=true
+}
+function openFavorites(){
+  bindFavPager()
+  window._favPage=0
+  $('fav-overlay').classList.add('show')
+  // 拉最新收藏
+  fetch('/api/thoughts/favorites').then(r=>r.json()).then(d=>{
+    window._favList=Array.isArray(d.favorites)?d.favorites:[]
+    window._favIds=new Set(window._favList.map(x=>String(x.id||'')).filter(Boolean))
+    updateFavCount(window._favList.length)
+    renderFavoritesPage()
+    syncHeartButtons()
+  }).catch(()=>renderFavoritesPage())
+}
+function closeFavorites(){$('fav-overlay').classList.remove('show')}
+function favTotalPages(){
+  const n=(window._favList||[]).length
+  const size=Math.max(1,window._favPageSize||2)
+  return Math.max(1, Math.ceil(n / size) || 1)
+}
+function favPrevPage(){
+  if(window._favPage>0){
+    window._favPage--
+    renderFavoritesPage()
+  }
+}
+function favNextPage(){
+  const total=favTotalPages()
+  if(window._favPage<total-1){
+    window._favPage++
+    renderFavoritesPage()
+  }
+}
+function renderFavoritesPage(){
+  bindFavPager()
+  const body=$('fav-modal-body'),info=$('fav-page-info'),prev=$('fav-prev'),next=$('fav-next')
+  if(!body)return
+  const list=Array.isArray(window._favList)?window._favList:[]
+  const size=Math.max(1,window._favPageSize||2)
+  const totalPages=list.length?Math.max(1,Math.ceil(list.length/size)):0
+  if(totalPages && window._favPage>totalPages-1)window._favPage=Math.max(0,totalPages-1)
+  if(window._favPage<0)window._favPage=0
+  const start=window._favPage*size
+  const pageItems=list.slice(start,start+size)
+  // 换页时滚回顶部，避免像瀑布流残留
+  body.scrollTop=0
+  if(!list.length){
+    body.innerHTML=`<div class="fav-empty">还没有悄悄喜欢<br><span style="font-size:11px;opacity:.7">点小心心就能收进来</span></div>`
+  }else{
+    body.innerHTML=pageItems.map((item,idx)=>{
+      const t=normalizeThoughts(item.thoughts||{}),id=String(item.id||''),ts=item.updated_at||item.favorited_at
+      cacheThought({id,updated_at:item.updated_at,thoughts:normalizeThoughts(t)})
+      let rows=''
+      const mood=(t[MOOD_KEY]||t['情绪']||'').trim()
+      for(const k of CARD_KEYS){
+        const m=T[k],v=(t[k]||'').trim()
+        if(!v)continue
+        const has=id&&fieldHasSticker(id,k)
+        const fOn=id&&fieldFavOn(id,k)
+        rows+=`<div class="fav-card-row" data-field-row="${aesc(k)}"><span class="fav-card-emoji stickerable${has?' has-sticker':''}${fOn?' faved':''}" data-sticker-id="${aesc(id)}" data-sticker-field="${aesc(k)}" title="单击收藏这一句 · 长按贴纸" onclick="if(this._suppressClick)return;event.stopPropagation();toggleFieldFavorite('${aesc(id)}','${aesc(k)}')">${m.e}${has?'<span class="sticker-dot"></span>':''}</span><span class="fav-card-label" style="color:${m.c}">${m.l}</span><span class="fav-card-text">${esc(v)}</span>${id?fieldStickerHtml(id,k):''}</div>`
+      }
+      const moodHas=id&&fieldHasSticker(id,MOOD_KEY)
+      const moodHtml=mood?`<span class="mood-chip stickerable${moodHas?' has-sticker':''}" data-sticker-id="${aesc(id)}" data-sticker-field="${aesc(MOOD_KEY)}" title="长按给「${esc(MOOD_KEY)}」贴纸"><span class="mood-dot"></span><span class="mood-text">${esc(mood)}</span>${moodHas?'<span class="sticker-dot"></span>':''}</span>`:''
+      return `<div class="fav-card" data-id="${aesc(id)}" style="animation-delay:${idx*0.04}s">
+        <div class="fav-card-top">
+          <span class="fav-card-time">${ts?new Date(ts).toLocaleString():''}</span>
+          <div class="hist-item-actions">${moodHtml}${id?noteBtn(id):''}${id?heartBtn(id,true):''}</div>
+        </div>
+        ${rows||'<div class="fav-empty" style="padding:12px 0">空空的一条</div>'}
+        ${id?noteBlock(id,'fav-note'):''}
+      </div>`
+    }).join('')
+    bindStickerTargets(body)
+  }
+  if(info){
+    info.textContent=list.length
+      ? `${window._favPage+1} / ${totalPages} · 共${list.length}条`
+      : `0 / 0`
+  }
+  if(prev)prev.disabled=!list.length||window._favPage<=0
+  if(next)next.disabled=!list.length||window._favPage>=Math.max(totalPages-1,0)
+}
+
+async function loadThoughts(){
+  const c=$('t-container');if(!c)return
+  try{
+    const r=await fetch('/api/thoughts'),d=await r.json(); applyThoughtSchema(d.schema||{keys:d.thought_keys,mood_key:d.mood_key,card_keys:d.card_keys,meta:d.meta}); if(typeof d.ext_panel_enabled==='boolean')applyExtPanel(d.ext_panel_enabled); const t=normalizeThoughts(d.thoughts||{}),ts=d.updated_at
+    const curId=d.current_id||''
+    const favIds=new Set((d.favorite_ids||[]).map(String))
+    window._favIds=favIds
+    window._fieldFavMap=d.field_favorites||{}
+    updateFavCount(typeof d.favorites_count==='number'?d.favorites_count:favIds.size)
+    if(curId)cacheThought({id:curId,updated_at:ts,thoughts:normalizeThoughts(t)})
+
+    const sig=[curId,ts,JSON.stringify(t),[...favIds].sort().join(',')].join('|')
+    // 内容+收藏状态都没变就不重画 current
+    if(sig!==window._thoughtsSig){
+      window._thoughtsSig=sig
+      let any=false
+      for(const k of THOUGHT_KEYS){
+        if((t[k]||'').trim())any=true
+      }
+      // 心 + 便签按钮与「实时」同一行（右对齐）
+      setNotesMap(d.notes||{})
+      const slot=$('live-heart-slot')
+      if(slot){
+        slot.innerHTML=(any&&curId)?(`${noteBtn(curId)}${heartBtn(curId,favIds.has(curId))}`):''
+      }
+      const nslot=$('live-note-slot')
+      if(nslot){nslot.innerHTML=(any&&curId)?noteBlock(curId,'live-note'):''}
+      // 情绪改成小气泡，贴在「实时」那一行
+      const moodSlot=$('live-mood-slot')
+      if(moodSlot){moodSlot.innerHTML=moodChip((t[MOOD_KEY]||t['情绪']||'').trim(), curId); bindStickerTargets(moodSlot, curId)}
+      let html=''
+      if(!any){
+        html=`<div class="empty"><div class="e-icon">💭</div><div class="e-msg">暂无心声</div><div class="e-hint">等枝枝来找我就有啦</div></div>`
+      }else{
+        const grid=CARD_KEYS.map(k=>{
+          const m=T[k],v=(t[k]||'').trim(),mt=!v
+          const has=curId&&fieldHasSticker(curId,k)
+          const fOn=curId&&fieldFavOn(curId,k)
+          return `<div class="tc tc-${m.s}" data-field="${aesc(k)}" data-tid="${aesc(curId)}"><div class="tc-glow"></div>
+            <div class="tc-head"><div class="tc-icon stickerable${has?' has-sticker':''}${fOn?' faved':''}" data-sticker-id="${aesc(curId)}" data-sticker-field="${aesc(k)}" title="单击收藏这一句 · 长按贴纸" onclick="if(this._suppressClick)return;event.stopPropagation();toggleFieldFavorite('${aesc(curId)}','${aesc(k)}')">${m.e}${has?'<span class="sticker-dot"></span>':''}</div><span class="tc-label">${m.l}</span></div>
+            <div class="tc-body${mt?' muted':''}">${mt?'无声息……':esc(v)}</div>
+            ${curId?fieldStickerHtml(curId,k):''}</div>`
+        }).join('')
+        html=`<div class="t-grid">${grid}</div>`
+      }
+      c.innerHTML=html+(ts?`<div class="ts-updated">${new Date(ts).toLocaleString()}</div>`:'')
+      bindStickerTargets(c, curId)
+    }else{
+      setNotesMap(d.notes||window._notesMap||{})
+      const moodSlot=$('live-mood-slot')
+      if(moodSlot){moodSlot.innerHTML=moodChip((t[MOOD_KEY]||t['情绪']||'').trim(), curId); bindStickerTargets(moodSlot, curId)}
+      const slot=$('live-heart-slot')
+      if(slot&&curId){
+        // 仅同步心状态，不整行重画
+        const on=favIds.has(curId)
+        const btn=slot.querySelector('.fav-heart')
+        if(btn){btn.classList.toggle('on',on);btn.textContent=on?'❤':'♡';btn.title=on?'取消收藏':'收藏这条心声'}
+        else if(!slot.innerHTML.trim()){slot.innerHTML=`${noteBtn(curId)}${heartBtn(curId,on)}`}
+        if(!slot.querySelector('.note-btn')){
+          const nb=noteBtn(curId)
+          if(nb)slot.insertAdjacentHTML('afterbegin', nb)
+        }
+      }
+      const nslot=$('live-note-slot')
+      if(nslot&&curId){nslot.innerHTML=noteBlock(curId,'live-note')}
+      syncHeartButtons();syncFieldHearts()
+    }
+    // 首次渲染 / 内容变更才重画；收藏只同步小心心
+    if(!window._histLoaded){
+      renderHistory(d,true)
+      window._noteSig=Object.keys(window._notesMap||{}).sort().map(k=>k+':'+(window._notesMap[k].text||'')+':'+(window._notesMap[k].updated_at||'')).join('|')
+    }else{
+      const nextSig=histSignature(d.history||[])
+      const noteSig=Object.keys(window._notesMap||{}).sort().map(k=>k+':'+(window._notesMap[k].text||'')+':'+(window._notesMap[k].updated_at||'')).join('|')
+      if(nextSig!==window._histSig || noteSig!==window._noteSig){
+        const force=nextSig===window._histSig && noteSig!==window._noteSig
+        window._noteSig=noteSig
+        renderHistory(d, force)
+      }else{
+        ;(d.history||[]).forEach(item=>{if(item&&item.id)cacheThought(item)})
+        syncHeartButtons();syncFieldHearts()
+        if(histOpen)resizeOpenHist()
+      }
+    }
+  }catch(e){c.innerHTML=`<div class="empty"><div class="e-icon">⚠️</div><div class="e-msg">加载失败</div><div class="e-hint">${e.message}</div></div>`}
+}
+
+// ===== PHONE =====
+const PI={friend_ping:'💬',city_event:'🌆',shop_update:'🏪',volunteer:'🤝',contest:'🏆',coupon:'🎫',food:'🍔',movie:'🎬',book:'📚',pet:'🐾',weather:'⛅',smart_home:'🏠',hobby:'🧸',shopping:'🛍️',logistics:'📦',official:'📜',game:'🎮',alarm:'🌙',sleep:'🌙',timer:'⏰'}
+const WAKE_SKIP_TYPES=new Set(['alarm','sleep','timer'])
+window._phoneSig=''
+window._wakeSig=''
+window._mealSig=''
+
+const MEAL_SLOT_META={
+  breakfast:{label:'早餐',emoji:'🥐'},
+  lunch:{label:'午餐',emoji:'🍱'},
+  dinner:{label:'晚餐',emoji:'🍲'}
+}
+
+function phoneKey(x){
+  return [x.type||'',x.source||'',x.title||'',String(x.detail||'').slice(0,80),x.updated_at||''].join('|')
+}
+
+function collectPhoneList(d){
+  // 优先 feed 瀑布流；兼容旧 active+history
+  // 闹钟/睡眠类不进推送列表，单独走右上角小胶囊
+  // 三餐独立展示，不进普通推送
+  let p=[]
+  const feed=Array.isArray(d.feed)?d.feed:[]
+  if(feed.length){
+    for(const item of feed){
+      const x=(item&&item.push)?item.push:item
+      if(x&&typeof x==='object' && !WAKE_SKIP_TYPES.has(x.type) && item.reason!=='wakeup_alarm' && !x.meal_slot && item.reason!=='meal' && !(String(item.reason||'').startsWith('meal_'))){
+        p.push({...x,_a:false,_at:item.pushed_at||x.updated_at})
+      }
+    }
+  }else{
+    if(d.active_push && !WAKE_SKIP_TYPES.has(d.active_push.type) && !d.active_push.meal_slot){
+      p.push({...d.active_push,_a:true,_at:d.active_push.updated_at})
+    }
+    for(const x of(d.history||[])){
+      if(x&&x.push && !WAKE_SKIP_TYPES.has(x.push.type) && !x.push.meal_slot){
+        p.push({...x.push,_a:false,_at:x.archived_at||x.push.updated_at})
+      }
+    }
+  }
+  const seen=new Set(),out=[]
+  for(const x of p){
+    const k=phoneKey(x)
+    if(seen.has(k))continue
+    seen.add(k);out.push(x)
+  }
+  if(d.active_push){
+    const ak=phoneKey(d.active_push)
+    for(const x of out){if(phoneKey(x)===ak)x._a=true}
+  }
+  return out.slice(0,30)
+}
+
+function renderPhoneItem(x){
+  const ic=PI[x.type]||'📱'
+  const ts=x.updated_at||x._at
+  const ts2=ts?new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):''
+  const title=x.title||x.source||'通知',detail=x.detail||''
+  return `<div class="nitem${x._a?' cur':''}" data-key="${aesc(phoneKey(x))}" data-title="${aesc(title)}" data-detail="${aesc(detail)}">
+    <div class="nico">${ic}</div>
+    <div class="nbody">
+      <div class="ntop"><span class="nsrc">${esc(x.source||x.type||'未知')}</span><span class="ntime">${ts2}</span></div>
+      ${x.title?`<div class="ntitle">${esc(x.title)}</div>`:''}
+      <div class="ndetail">${esc(detail)}</div>
+    </div>
+  </div>`
+}
+
+function bindPhoneClicks(c){
+  c.querySelectorAll('.nitem').forEach(el=>{
+    if(el._bound)return
+    el._bound=true
+    el.addEventListener('click',()=>{
+      const t=el.getAttribute('data-title')||'通知',d=el.getAttribute('data-detail')||''
+      showModal(t,d)
+    })
+  })
+}
+
+function renderWakePill(d){
+  const pill=$('wake-pill'),lab=$('wake-label'),sub=$('wake-sub')
+  if(!pill||!lab||!sub)return
+  const w=d&&d.next_wake
+  if(!w||!w.subtitle){
+    if(window._wakeSig!==''){window._wakeSig='';pill.classList.remove('show')}
+    return
+  }
+  const label=w.label||'星星睡醒了'
+  const subtitle=w.subtitle
+  const sig=label+'|'+subtitle
+  if(sig===window._wakeSig && pill.classList.contains('show'))return
+  window._wakeSig=sig
+  lab.textContent=label
+  sub.textContent=subtitle
+  pill.title=`${label} · ${subtitle}`
+  pill.classList.add('show')
+}
+
+function mealDishes(x){
+  if(!x||typeof x!=='object')return []
+  if(Array.isArray(x.dishes)&&x.dishes.length){
+    return x.dishes.map(s=>String(s||'').trim()).filter(Boolean)
+  }
+  const raw=String(x.title||x.detail||'').trim()
+  if(!raw)return []
+  const parts=raw.split(/[、,，/|]/).map(s=>s.trim()).filter(Boolean)
+  return parts.length?parts:[raw]
+}
+
+function renderMealPanel(d){
+  const panel=$('meal-panel'), grid=$('meal-grid')
+  if(!panel||!grid)return
+  const dm=d&&d.daily_meals
+  const today=new Date()
+  const ymd=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`
+  if(!dm||dm.date!==ymd||!dm.meals){
+    if(window._mealSig!==''){window._mealSig='';panel.style.display='none';grid.innerHTML=''}
+    return
+  }
+  const meals=dm.meals||{}
+  const slots=['breakfast','lunch','dinner']
+  const rows=slots.map(k=>{
+    const dishes=mealDishes(meals[k])
+    const meta=MEAL_SLOT_META[k]||{label:k,emoji:'🍽'}
+    return {key:k,meta,dishes}
+  }).filter(x=>x.dishes.length)
+  const sig=[dm.date,dm.generated_at||'',...rows.map(r=>r.key+':'+r.dishes.join(','))].join('||')
+  if(sig===window._mealSig && panel.style.display!=='none' && grid.querySelector('.meal-row'))return
+  window._mealSig=sig
+  if(!rows.length){
+    grid.innerHTML=`<span class="meal-empty">还没有</span>`
+  }else{
+    grid.innerHTML=rows.map(r=>{
+      const text=r.dishes.join('、')
+      return `<div class="meal-row" data-slot="${aesc(r.key)}">
+        <span class="meal-emoji">${r.meta.emoji||'🍽'}</span>
+        <span class="meal-slot-label">${esc(r.meta.label||r.key)}</span>
+        <span class="meal-dishes" title="${aesc(text)}">${esc(text)}</span>
+      </div>`
+    }).join('')
+  }
+  panel.style.display='block'
+}
+
+async function loadPhone(){
+  const c=$('p-list');if(!c)return
+  if(!window._extPanelEnabled){
+    c.innerHTML=`<div class="empty"><div class="e-icon">📴</div><div class="e-msg">扩展面板已关闭</div></div>`
+    return
+  }
+  try{
+    const r=await fetch('/api/phone'),d=await r.json()
+    if(d && typeof d.ext_panel_enabled==='boolean')applyExtPanel(d.ext_panel_enabled)
+    if(!window._extPanelEnabled){
+      c.innerHTML=`<div class="empty"><div class="e-icon">📴</div><div class="e-msg">扩展面板已关闭</div></div>`
+      return
+    }
+    renderWakePill(d)
+    renderMealPanel(d)
+    const p=collectPhoneList(d)
+    const sig=p.map(phoneKey).join('||')
+    // 内容没变就不整页重画，避免“被顶掉/闪一下”的错觉
+    if(sig===window._phoneSig && (c.querySelector('.nitem')||c.querySelector('.empty')))return
+    window._phoneSig=sig
+    if(!p.length){c.innerHTML=`<div class="empty"><div class="e-icon">🔕</div><div class="e-msg">暂无通知</div></div>`;return}
+    c.innerHTML=p.map(renderPhoneItem).join('')
+    bindPhoneClicks(c)
+  }catch(e){c.innerHTML=`<div class="empty"><div class="e-icon">⚠️</div><div class="e-msg">加载失败</div></div>`}
+}
+
+function showModal(t,d){$('modal-title').textContent=t;$('modal-body').textContent=d;$('modal').classList.add('show')}
+
+// ===== GLASS TOGGLE =====
+function toggleGlass(){
+  document.body.classList.toggle('glass')
+  const btn=$('glass-btn')
+  if(btn)btn.textContent=document.body.classList.contains('glass')?'✨':'🪟'
+}
+
+// 启动：先问后端开关，再决定要不要拉手机数据
+;(async function boot(){
+  try{
+    const r=await fetch('/api/health'),d=await r.json()
+    if(d && typeof d.ext_panel_enabled==='boolean')applyExtPanel(d.ext_panel_enabled)
+  }catch(e){applyExtPanel(false)}
+  loadThoughts()
+  if(window._extPanelEnabled)loadPhone()
+})()
+setInterval(()=>{
+  // 展开动画中途别硬刷，电脑端会抖
+  if(window._histAnimating)return
+  if($('p-thoughts').classList.contains('active'))loadThoughts()
+  if(window._extPanelEnabled && $('p-phone').classList.contains('active'))loadPhone()
+},5000)
+// 窗口缩放时校正回放高度
+window.addEventListener('resize',()=>{if(histOpen)resizeOpenHist()},{passive:true})
+</script>
+
+<!-- note modal -->
+<div class="note-overlay" id="note-overlay" onclick="if(event.target===this)closeNoteModal()">
+  <div class="note-modal" onclick="event.stopPropagation()">
+    <div class="note-modal-title" id="note-modal-title">写给小回的便签</div>
+    <div class="note-modal-hint" id="note-modal-hint">最多80字。他会看见，不是改他的心声。长按字段 emoji 可精确贴纸。</div>
+    <textarea class="note-input" id="note-input" maxlength="80" placeholder="例如：看过 / 不许犯困 / 这条可爱"></textarea>
+    <div class="note-modal-actions">
+      <button class="note-act danger" id="note-clear" type="button" onclick="clearNote()">去掉</button>
+      <button class="note-act" type="button" onclick="closeNoteModal()">取消</button>
+      <button class="note-act primary" id="note-save" type="button" onclick="saveNote()">贴上</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

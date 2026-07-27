@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#B6A9C8"/>
+      <stop offset="50%" style="stop-color:#A09BC3"/>
+      <stop offset="100%" style="stop-color:#9DBFC3"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- thought bubble -->
+  <ellipse cx="220" cy="230" rx="130" ry="100" fill="rgba(255,255,255,0.92)"/>
+  <ellipse cx="108" cy="310" rx="40" ry="30" fill="rgba(255,255,255,0.92)"/>
+  <ellipse cx="80" cy="360" rx="20" ry="14" fill="rgba(255,255,255,0.92)"/>
+  <!-- star -->
+  <g transform="translate(200, 210) scale(1.6)">
+    <polygon points="0,-40 12,-12 40,-12 18,6 26,36 0,18 -26,36 -18,6 -40,-12 -12,-12" fill="#A09BC3" opacity="0.9"/>
+  </g>
+  <!-- sparkles -->
+  <circle cx="290" cy="160" r="6" fill="#fff" opacity="0.8"/>
+  <circle cx="140" cy="140" r="4" fill="#fff" opacity="0.6"/>
+  <circle cx="300" cy="300" r="5" fill="#fff" opacity="0.7"/>
+  <!-- bunny ears hint -->
+  <ellipse cx="200" cy="102" rx="14" ry="28" fill="rgba(255,255,255,0.15)" transform="rotate(-8, 200, 102)"/>
+  <ellipse cx="240" cy="98" rx="14" ry="28" fill="rgba(255,255,255,0.15)" transform="rotate(8, 240, 98)"/>
+</svg>
