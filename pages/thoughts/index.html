@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>小回的心声</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #F8F6FA;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+    #frame-wrap {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      flex: 1;
+      display: block;
+      background: #F8F6FA;
+    }
+    /* 顶部精致轻量条，提供独立窗口打开与重载 */
+    .hub-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 14px;
+      background: rgba(248, 246, 250, 0.92);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(157, 149, 191, 0.2);
+      font-size: 12px;
+      color: #6F6690;
+      z-index: 10;
+    }
+    .hub-title {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #4E4758;
+    }
+    .hub-title .dot {
+      width: 7px;
+      height: 7px;
+      background: #9D95BF;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 6px rgba(157, 149, 191, 0.6);
+    }
+    .hub-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-action {
+      text-decoration: none;
+      color: #6F6690;
+      background: #FFFFFF;
+      border: 1px solid rgba(157, 149, 191, 0.3);
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s ease;
+    }
+    .btn-action:hover {
+      background: #F4F1F9;
+      color: #4E4758;
+      border-color: #9D95BF;
+    }
+    #fallback {
+      display: none;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      background: #ffffff;
+      padding: 24px 32px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+      border: 1px solid #DDD7E8;
+      max-width: 90%;
+    }
+    #fallback h3 {
+      font-size: 16px;
+      color: #2A2633;
+      margin-bottom: 8px;
+    }
+    #fallback p {
+      font-size: 13px;
+      color: #8E869B;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div id="frame-wrap">
+    <div class="hub-bar">
+      <div class="hub-title">
+        <span class="dot"></span>
+        <span>小回的心声 · 实时面板</span>
+      </div>
+      <div class="hub-actions">
+        <button class="btn-action" onclick="reloadFrame()" title="刷新心声">🔄 刷新</button>
+      </div>
+    </div>
+    <iframe id="hubFrame" src="about:blank" allow="clipboard-write; clipboard-read"></iframe>
+  </div>
+
+  <div id="fallback">
+    <h3>正在载入心声系统...</h3>
+    <p>若长时间未显示，请检查 1016 端口服务，或直接在新标签页打开。</p>
+    <a id="btnFallback" class="btn-action" href="#" target="_blank" style="padding: 6px 14px; font-size: 13px;">直接打开心声独立网页 ↗</a>
+  </div>
+
+  <script>
+    const PORT = '1016';
+    const host = window.location.hostname || '127.0.0.1';
+    const targetUrl = window.location.protocol + '//' + host + ':' + PORT;
+
+    const frame = document.getElementById('hubFrame');
+    const btnFb = document.getElementById('btnFallback');
+
+    btnFb.href = targetUrl;
+    frame.src = targetUrl;
+
+    function reloadFrame() {
+      try {
+        frame.contentWindow.location.reload();
+      } catch (e) {
+        frame.src = targetUrl;
+      }
+    }
+
+    // 5秒后检查如果无法加载则给出备用指引
+    const timer = setTimeout(() => {
+      try {
+        if (!frame.contentDocument || !frame.contentDocument.body || frame.contentDocument.body.innerHTML === '') {
+          // 跨域时访问 contentDocument 会抛异常，属于正常加载外部页面的情况
+        }
+      } catch (e) {
+        // 跨域正常加载，忽略
+      }
+    }, 5000);
+  </script>
+</body>
+</html>

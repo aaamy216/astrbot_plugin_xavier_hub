@@ -2,14 +2,16 @@
 Xavier Hub Plugin
 心声系统（独立后端 + 前端）+ 手机推送前端展示
 
-心声系统完全独立于 xavier_mood_core：
-- on_llm_request 注入 <xavier_thoughts> 强制指令
-- on_llm_response 提取心声写入 hub 自己的 state 文件（不改 completion_text，保留进对话历史）
-- on_decorating_result(priority=50) 剥离心声：清 chain + active_function 的 extra 原文缓存，避免 reply/recall 接管发送时泄漏
-- 即使 mood_core 整插件停用，hub 也能独立运作
-
-手机推送前端：只读 astrbot_plugin_phone_push_lite/phone_push_state.json
-运行时数据目录：data/plugin_data/astrbot_plugin_xavier_hub/（代码在 plugins，数据在 plugin_data）
+心声在三种模式下的去向：
+- 前端网页：任何模式都能看到。模型回复一回来就先解析 <xt> 并写入插件自己的状态文件。
+- 对话上下文：none / last_n 不进；all 进。
+  AstrBot 4.11 起，助手回复会先放进 run_context.messages，再触发 on_llm_response，
+  最后保存历史用的就是 run_context.messages。所以心声的剥离放在 ToolLoopAgentRunner
+  取回模型响应的入口处（_RunnerGuard），在上下文消息组装之前完成，全程不改 req.contexts
+  和已保存的历史。工具调用那一轮、流式分片都在这里一起处理。
+- 系统提示词：只有 last_n 注入，并且只注入「当前会话 + 当前对话」里的最近 N 轮，
+  /new、/reset 之后从头计，私聊和群聊互不可见。
+- 聊天框：任何模式都看不到（流式分片在拦截处过滤，非流式在 on_decorating_result 清洗）。
 """
 from pathlib import Path
 from typing import Dict
@@ -18,10 +20,14 @@ import re
 import threading
 import asyncio
 import time
+import os
+import hashlib
+import functools
+import weakref
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 from astrbot.api import logger
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.message_components import Plain
@@ -29,8 +35,8 @@ import shutil
 
 
 DEFAULT_THOUGHTS_INSTRUCTION = (
-    "\n[系统强制指令] 在你回复的最后，必须使用 <xavier_thoughts>...</xavier_thoughts> 标签输出你当前的内心活动。格式必须是严格的JSON：\n"
-    "<xavier_thoughts>\n"
+    "\n[系统强制指令] 在你回复的最后，必须使用 <xt>...</xt> 标签输出你当前的内心活动。格式必须是严格的JSON：\n"
+    "<xt>\n"
     "{\n"
     "  \"情绪\": \"一两个词或一句短话，当前心情底色。如 平静/开心/有点酸/认真/犯困/温柔\",\n"
     "  \"兔在想\": \"念头，当前对这句话的直接想法\",\n"
@@ -38,7 +44,7 @@ DEFAULT_THOUGHTS_INSTRUCTION = (
     "  \"兔心愿\": \"现在最想做的事或最期望发生的事\",\n"
     "  \"兔言兔语\": \"一个无厘头的可爱想法\"\n"
     "}\n"
-    "</xavier_thoughts>\n"
+    "</xt>\n"
     "注意：这个标签里的内容不会显示给用户，仅用于后台记录。必须包含这五个字段。"
 )
 
@@ -56,7 +62,394 @@ LEGACY_THOUGHT_ALIASES = {
     "暗线": ("暗线", "兔悄悄", "兔心底"),
     "愿望": ("愿望", "兔心愿", "兔想要"),
 }
-THOUGHT_KEYS = DEFAULT_THOUGHT_KEYS  # 启动后会被实例配置覆盖
+THOUGHT_KEYS = DEFAULT_THOUGHT_KEYS
+
+
+PLUGIN_VERSION = "0.4.1"
+
+
+# ======== 心声标签：识别 / 剥离 / 流式过滤 ========
+TURN_EXTRA_KEY = "_xavier_hub_turn"
+_XT_OPEN = "<xt>"
+_XT_CLOSE = "</xt>"
+_XT_OPEN_RE = re.compile(r"<xt>", re.IGNORECASE)
+_XT_CLOSE_RE = re.compile(r"</xt>", re.IGNORECASE)
+_XT_BLOCK_RE = re.compile(r"<xt>.*?(?:</xt>|$)", re.IGNORECASE | re.DOTALL)
+_XT_CAPTURE_RE = re.compile(r"<xt>(.*?)(?:</xt>|$)", re.IGNORECASE | re.DOTALL)
+
+
+def _has_xt_tag(text) -> bool:
+    if not isinstance(text, str) or not text:
+        return False
+    low = text.lower()
+    return _XT_OPEN in low or _XT_CLOSE in low
+
+
+def strip_xt_text(text):
+    """删掉文本里的 <xt> 心声块（没闭合的一直删到结尾），顺手收拾多余空行。
+    文本里没有心声标签时原样返回，不做任何改动。"""
+    if not isinstance(text, str):
+        return ""
+    if not _has_xt_tag(text):
+        return text
+    cleaned = _XT_BLOCK_RE.sub("", text)
+    cleaned = _XT_CLOSE_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _partial_suffix_len(text: str, tag: str) -> int:
+    """text 末尾有几个字符可能是 tag 的开头（流式分片把标签切断时用）。"""
+    max_k = min(len(tag) - 1, len(text))
+    for k in range(max_k, 0, -1):
+        if text[-k:].lower() == tag[:k]:
+            return k
+    return 0
+
+
+class _XtStreamFilter:
+    """按顺序喂入文本片段，吞掉 <xt>...</xt> 之间的内容，标签被切成两半也能接上。"""
+
+    __slots__ = ("pending", "in_xt", "active")
+
+    def __init__(self):
+        self.pending = ""
+        self.in_xt = False
+        self.active = False
+
+    def feed(self, text: str) -> str:
+        self.active = True
+        data = self.pending + (text or "")
+        self.pending = ""
+        out = []
+        pos = 0
+        size = len(data)
+        while pos < size:
+            if not self.in_xt:
+                m = _XT_OPEN_RE.search(data, pos)
+                if m is None:
+                    keep = _partial_suffix_len(data[pos:], _XT_OPEN)
+                    out.append(data[pos:size - keep])
+                    self.pending = data[size - keep:] if keep else ""
+                    break
+                out.append(data[pos:m.start()])
+                self.in_xt = True
+                pos = m.end()
+            else:
+                m = _XT_CLOSE_RE.search(data, pos)
+                if m is None:
+                    keep = _partial_suffix_len(data[pos:], _XT_CLOSE)
+                    self.pending = data[size - keep:] if keep else ""
+                    break
+                self.in_xt = False
+                pos = m.end()
+        return "".join(out)
+
+    def finish(self) -> str:
+        """流结束：没凑成标签的半截文字原样还回去；停在心声里面的内容直接丢掉。"""
+        tail = "" if self.in_xt else self.pending
+        self.pending = ""
+        self.in_xt = False
+        self.active = False
+        return tail
+
+
+def _mark(obj, attr: str):
+    try:
+        setattr(obj, attr, True)
+    except Exception:
+        pass
+
+
+def _strip_xt_in_components(comps: list, copy_plain: bool = False) -> list:
+    """对消息组件列表剥离心声，返回保留下来的组件。
+    copy_plain=True 时换成新的 Plain 对象，不改动原组件（发送前清洗用，避免连带改掉上下文里的原文）。"""
+    f = _XtStreamFilter()
+    kept, plains = [], []
+    for comp in comps:
+        if isinstance(comp, Plain):
+            new_text = f.feed(comp.text or "")
+            if copy_plain:
+                comp = Plain(new_text)
+            else:
+                comp.text = new_text
+            plains.append(comp)
+            kept.append(comp)
+        elif not f.in_xt:
+            kept.append(comp)
+    tail = f.finish()
+    if tail and plains:
+        plains[-1].text = (plains[-1].text or "") + tail
+    for comp in plains:
+        comp.text = re.sub(r"\n{3,}", "\n\n", comp.text or "")
+    non_empty = [c for c in plains if c.text.strip()]
+    if non_empty:
+        non_empty[0].text = non_empty[0].text.lstrip()
+        non_empty[-1].text = non_empty[-1].text.rstrip()
+    return [c for c in kept if not (isinstance(c, Plain) and not (c.text or "").strip())]
+
+
+def _components_have_xt(comps: list) -> bool:
+    texts = [c.text or "" for c in comps if isinstance(c, Plain)]
+    return any(_has_xt_tag(t) for t in texts) or _has_xt_tag("".join(texts))
+
+
+def _strip_raw_completion(raw):
+    """raw_completion（OpenAI 格式）里的正文也洗一下，个别插件会读它。"""
+    if not raw:
+        return
+    try:
+        choices = getattr(raw, "choices", None)
+        if choices is None and isinstance(raw, dict):
+            choices = raw.get("choices")
+        for choice in choices or []:
+            msg = getattr(choice, "message", None)
+            if msg is None and isinstance(choice, dict):
+                msg = choice.get("message")
+            if msg is None:
+                continue
+            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+            if isinstance(content, str) and _has_xt_tag(content):
+                if isinstance(msg, dict):
+                    msg["content"] = strip_xt_text(content)
+                else:
+                    msg.content = strip_xt_text(content)
+    except Exception as e:
+        logger.debug(f"[XavierHub] sanitize raw_completion failed: {e}")
+
+
+def _strip_xt_from_response(resp) -> None:
+    """就地删掉 LLMResponse 里的心声。Runner 之后用这份文本去组装上下文消息。"""
+    chain_obj = getattr(resp, "result_chain", None)
+    comps = getattr(chain_obj, "chain", None) if chain_obj is not None else None
+    if isinstance(comps, list) and any(isinstance(c, Plain) for c in comps):
+        if _components_have_xt(comps):
+            kept = _strip_xt_in_components(comps)
+            if kept:
+                chain_obj.chain = kept
+            else:
+                resp.result_chain = None
+                resp.completion_text = ""
+    else:
+        try:
+            text = resp.completion_text
+        except Exception:
+            text = None
+        if isinstance(text, str) and _has_xt_tag(text):
+            resp.completion_text = strip_xt_text(text)
+    _strip_raw_completion(getattr(resp, "raw_completion", None))
+
+
+def _num(value) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _thought_has_content(t) -> bool:
+    return isinstance(t, dict) and any(str(v or "").strip() for v in t.values())
+
+
+def _is_garbage_thought(t) -> bool:
+    if not isinstance(t, dict):
+        return False
+    idea = str(t.get("兔在想") or t.get("念头") or "").strip()
+    if idea == "解析失败":
+        return True
+    return str(t.get("情绪") or "").strip() == "混乱" and "解析失败" in idea
+
+
+def _atomic_write_text(path: Path, text: str):
+    """先写临时文件再整体替换，读的一方永远不会读到写了一半的文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for _ in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            # Windows 上目标文件正被别处打开时会替换失败，稍等再试
+            time.sleep(0.05)
+    try:
+        path.write_text(text, encoding="utf-8")
+    finally:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+
+
+class _TurnMarker:
+    """on_llm_request 时挂到事件上的标记：这一轮属于哪个会话、哪段对话、用什么模式。"""
+
+    __slots__ = ("_req_ref", "_req_id", "umo", "cid", "scope", "sess", "mode", "epoch", "recorded_at", "__weakref__")
+
+    def __init__(self, req, umo: str, cid: str, scope: str, sess: str, mode: str):
+        try:
+            self._req_ref = weakref.ref(req)
+        except TypeError:
+            self._req_ref = None
+        self._req_id = id(req)
+        self.umo = umo
+        self.cid = cid
+        self.scope = scope
+        self.sess = sess
+        self.mode = mode
+        self.epoch = 0
+        self.recorded_at = None
+
+    def matches(self, req) -> bool:
+        """只认主 Agent 用的那个请求对象，子 Agent、其他插件发起的请求都不算。"""
+        if req is None:
+            return False
+        if self._req_ref is not None:
+            return self._req_ref() is req
+        return id(req) == self._req_id
+
+    def __repr__(self):
+        return f"<XavierHubTurn mode={self.mode} scope={self.scope}>"
+
+
+_GUARD_HANDLER_ATTR = "_xavier_hub_guard_handler"
+_GUARD_REGISTRY_ATTR = "_xavier_hub_guard_wrappers"
+
+
+class _RunnerGuard:
+    """在 ToolLoopAgentRunner 拿到模型响应、还没组装上下文消息的时候处理 <xt>。
+
+    AstrBot 4.11 起，助手回复先被放进 run_context.messages，之后才触发 on_llm_response，
+    保存对话历史时存的就是 run_context.messages，所以在 on_llm_response 里改文本已经晚了。
+    这里包装的是 Runner 的内部方法；AstrBot 以后改了方法名就会装不上，
+    插件会在日志和 /xavier_hub_health 里提示，并退回 on_llm_response 的旧逻辑。
+    """
+
+    ITER_CANDIDATES = ("_iter_llm_responses_with_fallback", "_iter_llm_responses")
+    FINAL_METHOD = "_complete_with_assistant_response"
+
+    def __init__(self, plugin):
+        self._plugin_ref = weakref.ref(plugin)
+
+    def plugin(self):
+        return self._plugin_ref()
+
+    @staticmethod
+    def _runner_class():
+        from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
+
+        return ToolLoopAgentRunner
+
+    @classmethod
+    def install(cls, plugin):
+        """返回 (已拦截的方法名, 错误说明)。重复安装（插件重载）不会叠加包装。"""
+        try:
+            runner_cls = cls._runner_class()
+        except Exception as e:
+            return [], f"找不到 ToolLoopAgentRunner：{e}"
+        setattr(runner_cls, _GUARD_HANDLER_ATTR, cls(plugin))
+        registry = runner_cls.__dict__.get(_GUARD_REGISTRY_ATTR)
+        if not isinstance(registry, dict):
+            registry = {}
+            setattr(runner_cls, _GUARD_REGISTRY_ATTR, registry)
+        installed = []
+        iter_name = next((n for n in cls.ITER_CANDIDATES if callable(getattr(runner_cls, n, None))), None)
+        if iter_name:
+            cls._patch(runner_cls, registry, iter_name, cls._make_iter_wrapper)
+            installed.append(iter_name)
+        if callable(getattr(runner_cls, cls.FINAL_METHOD, None)):
+            cls._patch(runner_cls, registry, cls.FINAL_METHOD, cls._make_final_wrapper)
+            installed.append(cls.FINAL_METHOD)
+        if not iter_name:
+            return installed, "Runner 里没有找到可拦截的响应入口方法"
+        return installed, ""
+
+    @staticmethod
+    def _patch(runner_cls, registry: dict, name: str, factory):
+        current = getattr(runner_cls, name)
+        record = registry.get(name)
+        if record and runner_cls.__dict__.get(name) is record[0]:
+            base = record[1]  # 最外层就是我们上次装的，换成新的包装
+        else:
+            base = current  # 首次安装，或者外面又被别的插件包了一层：在最外层再包
+        wrapper = factory(base)
+        setattr(runner_cls, name, wrapper)
+        registry[name] = (wrapper, base)
+
+    @classmethod
+    def uninstall(cls, plugin):
+        try:
+            runner_cls = cls._runner_class()
+        except Exception:
+            return
+        handler = getattr(runner_cls, _GUARD_HANDLER_ATTR, None)
+        owner = handler.plugin() if handler is not None else None
+        if owner is not None and owner is not plugin:
+            return  # 已经被新加载的插件实例接管
+        setattr(runner_cls, _GUARD_HANDLER_ATTR, None)
+        registry = runner_cls.__dict__.get(_GUARD_REGISTRY_ATTR)
+        if not isinstance(registry, dict):
+            return
+        for name, (wrapper, base) in list(registry.items()):
+            if runner_cls.__dict__.get(name) is wrapper:
+                setattr(runner_cls, name, base)
+                registry.pop(name, None)
+            # 外面还有别人的包装时不拆，我们这层会因为没有 handler 而直接放行
+
+    @staticmethod
+    def _plugin_for(runner):
+        handler = getattr(type(runner), _GUARD_HANDLER_ATTR, None)
+        return handler.plugin() if handler is not None else None
+
+    @staticmethod
+    def _make_iter_wrapper(orig):
+        @functools.wraps(orig)
+        async def xavier_hub_iter_guard(self, *args, **kwargs):
+            plugin = _RunnerGuard._plugin_for(self)
+            agen = orig(self, *args, **kwargs)
+            try:
+                if plugin is not None:
+                    plugin._guard_stream_begin(self)
+                async for resp in agen:
+                    extra = None
+                    if plugin is not None:
+                        try:
+                            extra = await plugin._guard_on_response(self, resp)
+                        except Exception as e:
+                            logger.warning(f"[XavierHub] 心声拦截出错，本条响应原样放行: {e}")
+                    if extra:
+                        for item in extra:
+                            yield item
+                    yield resp
+            finally:
+                closer = getattr(agen, "aclose", None)
+                if closer is not None:
+                    try:
+                        await closer()
+                    except Exception:
+                        pass
+
+        return xavier_hub_iter_guard
+
+    @staticmethod
+    def _make_final_wrapper(orig):
+        @functools.wraps(orig)
+        async def xavier_hub_final_guard(self, llm_resp, *args, **kwargs):
+            plugin = _RunnerGuard._plugin_for(self)
+            if plugin is not None:
+                try:
+                    await plugin._guard_on_final(self, llm_resp)
+                except Exception as e:
+                    logger.warning(f"[XavierHub] 心声拦截出错，本条响应原样放行: {e}")
+            result = await orig(self, llm_resp, *args, **kwargs)
+            if plugin is not None:
+                try:
+                    await plugin._guard_after_final(self, llm_resp)
+                except Exception as e:
+                    logger.warning(f"[XavierHub] 清洗已入上下文的响应时出错: {e}")
+            return result
+
+        return xavier_hub_final_guard
 
 
 def _parse_thought_keys(raw):
@@ -104,21 +497,20 @@ def normalize_thoughts(raw, keys=None, aliases=None):
         out[key] = val
     return out
 
+
 @register(
     "astrbot_plugin_xavier_hub",
     "XavierHub",
     "沈星回心声系统（独立后端+前端）+ 可选手机推送前端",
-    "0.3.0",
+    PLUGIN_VERSION,
 )
 class XavierHubPlugin(Star):
     def __init__(self, context: Context, config: Dict = None):
         super().__init__(context)
         self.config = config or {}
-        # 插件代码目录（静态资源：html / manifest / icon）
         self.base_dir = Path(__file__).resolve().parent
         self.plugin_cfg = self.config
-        # 运行时数据目录：data/plugin_data/astrbot_plugin_xavier_hub/
-        # 更新/覆盖插件代码时，心声数据不会被冲掉
+
         try:
             self.data_dir = Path(StarTools.get_data_dir("astrbot_plugin_xavier_hub"))
         except Exception:
@@ -127,7 +519,13 @@ class XavierHubPlugin(Star):
             self.data_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             logger.warning(f"[XavierHub] mkdir data_dir failed: {e}")
-        # 心声字段表（配置驱动，前后端同步）
+
+        self._io_lock = threading.RLock()
+        self._scopes_cache = None
+        self._leftover_warned = set()
+        self._stream_states = weakref.WeakKeyDictionary()
+
+        # 心声字段配置
         self.thought_keys = _parse_thought_keys(self.plugin_cfg.get("thought_fields") or DEFAULT_THOUGHT_KEYS)
         mood = str(self.plugin_cfg.get("thought_mood_field", "") or "").strip()
         self.thought_mood_key = mood if mood in self.thought_keys else (self.thought_keys[0] if self.thought_keys else "情绪")
@@ -163,56 +561,70 @@ class XavierHubPlugin(Star):
         self.phone_push_dir = plugins_root / phone_dir_name
         self.phone_state_path = self.phone_push_dir / "phone_push_state.json"
 
-        # 运行时数据文件（在 data_dir，不在插件代码目录）
+        # 运行时数据文件
         self.thoughts_state_path = self.data_dir / "thoughts_state.json"
         self.thoughts_favorites_path = self.data_dir / "thoughts_favorites.json"
         self.thoughts_notes_path = self.data_dir / "thoughts_notes.json"
-        # 单句话红心（field-level：每条心声的某个字段单独标红心）
-        # 结构：{"<thought_id>": ["兔在想", "兔心愿", ...], ...}
+        self.daily_meals_path = self.data_dir / "daily_meals.json"
         self.thoughts_field_favorites_path = self.data_dir / "thoughts_field_favorites.json"
-        # 旧版曾把数据写在插件目录：启动时自动迁到 plugin_data
+        self.thoughts_scopes_path = self.data_dir / "thoughts_scopes.json"
         self._migrate_runtime_data_from_plugin_dir()
 
-        # wakeup 闹钟记录路径（用于注入 alarm 卡片）
         try:
             self.wakeup_alarms_path = Path(StarTools.get_data_dir("astrbot_plugin_wakeup")) / "wakeup_alarms.json"
         except Exception:
             self.wakeup_alarms_path = self.base_dir.parent.parent / "plugin_data" / "astrbot_plugin_wakeup" / "wakeup_alarms.json"
 
-        # 配置留空 = 不限用户（禁止把个人 QQ 写死为默认）
         _raw_target = self.plugin_cfg.get("target_user_id", "")
         if _raw_target is None or str(_raw_target).strip() == "":
             self.target_user_id = ""
         else:
             self.target_user_id = str(_raw_target).strip()
 
-        # 会话白名单（格式：platform:type:id，如 qq:friend:123456）
         raw = self.plugin_cfg.get("session_whitelist") or []
         self.session_whitelist = [str(s).strip() for s in raw if str(s).strip()]
 
         self.httpd = None
         self.http_thread = None
 
-        # 便签通知：复用 wakeup 同款“伪装用户消息”链路
-        self._main_loop = None
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except Exception:
+            try:
+                self._main_loop = asyncio.get_event_loop()
+            except Exception:
+                self._main_loop = None
         self._cqhttp_bot = None
         self._bot_qq_id = str(self.plugin_cfg.get("bot_qq_id", "") or "").strip()
         self._note_notify_umo = str(
             self.plugin_cfg.get("note_notify_umo", "") or ""
         ).strip()
         self._note_notify_enabled = bool(self.plugin_cfg.get("note_notify_enabled", True))
-        # 扩展面板：手机页 + 跨插件数据（phone_push / wakeup 等）。默认关。
         self.ext_panel_enabled = bool(self.plugin_cfg.get("ext_panel_enabled", False))
+        self._meals_task = None
 
-        if self.plugin_cfg.get("visualizer_enabled", True):
+        if self.plugin_cfg.get("visualizer_enabled", False):
             self._start_visualizer()
         logger.info(
-            f"XavierHubPlugin v0.3.0 loaded | ext_panel={'on' if self.ext_panel_enabled else 'off'}"
+            f"XavierHubPlugin v{PLUGIN_VERSION} loaded | ext_panel={'on' if self.ext_panel_enabled else 'off'}"
         )
 
+        # 心声拦截：在 Runner 组装上下文之前处理 <xt>
+        self._guard_methods, self._guard_error = [], ""
+        try:
+            self._guard_methods, self._guard_error = _RunnerGuard.install(self)
+        except Exception as e:
+            self._guard_error = f"安装失败：{e}"
+        if self._guard_methods and not self._guard_error:
+            logger.info(f"[XavierHub] 心声上下文拦截已启用: {', '.join(self._guard_methods)}")
+        else:
+            logger.warning(
+                f"[XavierHub] 心声上下文拦截没有装上（{self._guard_error or '未知原因'}）。"
+                "none/last_n 模式在 AstrBot 4.11 以后将无法阻止心声进入对话历史，"
+                "请把 AstrBot 版本和这条日志反馈给插件作者。"
+            )
 
     def _migrate_runtime_data_from_plugin_dir(self):
-        """把旧版写在插件目录的运行时 json 迁到 plugin_data；不覆盖已有新文件。"""
         names = (
             "thoughts_state.json",
             "thoughts_favorites.json",
@@ -229,12 +641,21 @@ class XavierHubPlugin(Star):
             if not src.exists() or not src.is_file():
                 continue
             try:
+                json.loads(src.read_text(encoding="utf-8"))
+            except Exception:
+                bak = self.base_dir / f"{name}.invalid_{int(time.time())}"
+                try:
+                    src.rename(bak)
+                except Exception:
+                    pass
+                logger.warning(f"[XavierHub] 插件目录里的 {name} 不是有效 JSON，未迁移，已改名为 {bak.name}")
+                continue
+            try:
                 if dst.exists() and dst.is_file():
-                    # 新位置已有：只把旧文件改名备份，避免双源混淆
                     bak = self.base_dir / f"{name}.migrated_away_{int(time.time())}"
                     try:
                         src.rename(bak)
-                        logger.info(f"[XavierHub] old data kept aside (dest exists): {src.name} -> {bak.name}")
+                        logger.info(f"[XavierHub] old data kept aside: {src.name} -> {bak.name}")
                     except Exception as e:
                         logger.warning(f"[XavierHub] rename old {src.name} failed: {e}")
                     continue
@@ -243,7 +664,6 @@ class XavierHubPlugin(Star):
                 try:
                     src.rename(bak)
                 except Exception:
-                    # 拷成功即可；改名失败也不阻断
                     bak = None
                 logger.info(
                     f"[XavierHub] migrated runtime data: {name} -> {self.data_dir}"
@@ -252,8 +672,7 @@ class XavierHubPlugin(Star):
             except Exception as e:
                 logger.error(f"[XavierHub] migrate {name} failed: {e}")
 
-    # ======== 权限检查 ========
-
+    # ======== 权限与过滤 ========
     def _is_target_user(self, event: AstrMessageEvent) -> bool:
         if not self.target_user_id or self.target_user_id == "":
             return True
@@ -263,20 +682,14 @@ class XavierHubPlugin(Star):
             return False
 
     def _is_session_allowed(self, event: AstrMessageEvent) -> bool:
-        """检查当前会话是否在白名单中。白名单为空时不限制。"""
         if not self.session_whitelist:
             return True
         try:
             session_id = event.get_session_id()
             unified = event.unified_msg_origin
             for entry in self.session_whitelist:
-                # 先精确匹配 unified_msg_origin
-                if entry == unified:
+                if entry == unified or entry == session_id:
                     return True
-                # 再匹配纯 session_id
-                if entry == session_id:
-                    return True
-                # 支持通配：qq:friend:* 匹配任意好友
                 if entry.endswith(":*") and unified.startswith(entry[:-1]):
                     return True
             return False
@@ -284,7 +697,6 @@ class XavierHubPlugin(Star):
             return True
 
     def _should_process(self, event: AstrMessageEvent) -> bool:
-        """组合检查：目标用户 + 会话白名单"""
         return self._is_target_user(event) and self._is_session_allowed(event)
 
     def _is_command_or_system(self, text: str) -> bool:
@@ -329,7 +741,6 @@ class XavierHubPlugin(Star):
             {"e": "🌙", "c": "#A09BC3", "s": "thought"},
         ]
         meta = {mood: {"e": "🫧", "c": "#E8B8C8", "s": "mood", "l": mood, "is_mood": True}}
-        # 固定已知字段风格
         fixed = {
             "兔在想": {"e": "💭", "c": "#7990A9", "s": "thought"},
             "兔悄悄": {"e": "🕵️", "c": "#B89A8C", "s": "shadow"},
@@ -357,29 +768,65 @@ class XavierHubPlugin(Star):
             "aliases": {k: list(v) for k, v in (getattr(self, "thought_aliases", {}) or {}).items()},
         }
 
-    def _save_thoughts(self, thoughts: dict):
+    # ======== 数据文件读写（HTTP 线程和主循环共用，统一加锁 + 原子写） ========
+    def _read_json_file(self, path: Path, default=None):
+        with self._io_lock:
+            try:
+                if path.exists():
+                    return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.debug(f"[XavierHub] read {path.name} failed: {e}")
+        return default
+
+    def _write_json_file(self, path: Path, data):
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        with self._io_lock:
+            _atomic_write_text(path, payload)
+
+    def _backup_broken_file(self, path: Path, err):
         try:
-            data = {
-                "updated_at": int(time.time() * 1000),
-                "thoughts": thoughts,
-            }
-            self.thoughts_state_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
+            bak = path.with_name(f"{path.name}.broken_{int(time.time())}")
+            shutil.copy2(path, bak)
+            logger.error(f"[XavierHub] {path.name} 读取失败（{err}），已备份为 {bak.name}，将按空文件继续")
+        except Exception as e:
+            logger.error(f"[XavierHub] {path.name} 读取失败且备份失败: {err} / {e}")
+
+    def _read_state_for_update(self) -> dict:
+        """准备改写心声状态文件时用：文件坏了先备份，避免新数据把能抢救的历史盖掉。"""
+        with self._io_lock:
+            p = self.thoughts_state_path
+            if not p.exists():
+                return {}
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                self._backup_broken_file(p, e)
+                return {}
+            return data if isinstance(data, dict) else {}
+
+    def _read_state_for_read(self) -> dict:
+        data = self._read_json_file(self.thoughts_state_path, {})
+        return data if isinstance(data, dict) else {}
+
+    def _save_thoughts(self, thoughts: dict):
+        """保留给外部调用的旧接口：只改最新一条，不动历史。"""
+        try:
+            with self._io_lock:
+                data = self._read_state_for_update()
+                data["updated_at"] = int(time.time() * 1000)
+                data["thoughts"] = thoughts
+                data.setdefault("history", [])
+                data.pop("scope", None)
+                data.pop("sess", None)
+                self._write_json_file(self.thoughts_state_path, data)
         except Exception as e:
             logger.error(f"[XavierHub] save thoughts failed: {e}")
 
     def _load_thoughts(self) -> dict:
-        try:
-            if self.thoughts_state_path.exists():
-                data = json.loads(self.thoughts_state_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and "thoughts" in data:
-                    if "history" not in data:
-                        data["history"] = []
-                    return data
-        except Exception as e:
-            logger.debug(f"[XavierHub] load thoughts failed: {e}")
+        data = self._read_state_for_read()
+        if "thoughts" in data:
+            data.setdefault("history", [])
+            return data
         return {
             "updated_at": None,
             "thoughts": {k: "" for k in self._get_thought_keys()},
@@ -389,8 +836,8 @@ class XavierHubPlugin(Star):
     def _load_favorites(self) -> list:
         try:
             p = self.thoughts_favorites_path
-            if p.exists():
-                data = json.loads(p.read_text(encoding="utf-8"))
+            data = self._read_json_file(p)
+            if data is not None:
                 if isinstance(data, dict) and isinstance(data.get("favorites"), list):
                     return data["favorites"]
                 if isinstance(data, list):
@@ -405,25 +852,19 @@ class XavierHubPlugin(Star):
                 "updated_at": int(time.time() * 1000),
                 "favorites": favorites[:200],
             }
-            self.thoughts_favorites_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            self._write_json_file(self.thoughts_favorites_path, payload)
         except Exception as e:
             logger.error(f"[XavierHub] save favorites failed: {e}")
 
-    # ===== 单句话红心（field-level） =====
     def _load_field_favorites_payload(self) -> dict:
-        """完整字段收藏文件：fields 映射 + sentences 单句列表。"""
         try:
             p = self.thoughts_field_favorites_path
-            if p.exists():
-                data = json.loads(p.read_text(encoding="utf-8"))
+            data = self._read_json_file(p)
+            if data is not None:
                 if not isinstance(data, dict):
                     return {"fields": {}, "sentences": []}
                 fields = data.get("fields")
                 if not isinstance(fields, dict):
-                    # 兼容旧格式：整文件就是 {tid: [fields]}
                     if all(isinstance(v, list) for v in data.values()):
                         fields = data
                     else:
@@ -446,7 +887,6 @@ class XavierHubPlugin(Star):
         try:
             if sentences is None:
                 sentences = self._load_field_sentences()
-            # 规范化 sentences
             clean_sents = []
             for s in sentences or []:
                 if not isinstance(s, dict):
@@ -462,17 +902,13 @@ class XavierHubPlugin(Star):
                     "favorited_at": s.get("favorited_at") or int(time.time() * 1000),
                     "source_updated_at": s.get("source_updated_at"),
                 })
-            # 最多保留 300 句
             clean_sents = clean_sents[:300]
             payload = {
                 "updated_at": int(time.time() * 1000),
                 "fields": fields if isinstance(fields, dict) else {},
                 "sentences": clean_sents,
             }
-            self.thoughts_field_favorites_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            self._write_json_file(self.thoughts_field_favorites_path, payload)
         except Exception as e:
             logger.error(f"[XavierHub] save field-favorites failed: {e}")
 
@@ -480,23 +916,19 @@ class XavierHubPlugin(Star):
     def _thought_item_id(updated_at, thoughts: dict) -> str:
         import hashlib
         t = thoughts or {}
-        # staticmethod 不能用 self；用当前全局 THOUGHT_KEYS（启动时已按配置覆盖）
         keys = THOUGHT_KEYS if THOUGHT_KEYS else DEFAULT_THOUGHT_KEYS
         parts = [str(updated_at or "")] + [str(t.get(k, "") or "") for k in keys]
-        # 兼容旧字段参与 id 稳定性：若新 key 为空但旧 alias 有值，也拼进去
         for old_k in ("念头", "暗线", "愿望", "无厘头"):
             if old_k not in keys and str(t.get(old_k) or "").strip():
                 parts.append(str(t.get(old_k) or ""))
         blob = "|".join(parts)
         return hashlib.md5(blob.encode("utf-8")).hexdigest()[:16]
 
-
     def _load_notes(self) -> dict:
-        """id -> {id,text,updated_at,thoughts?}"""
         try:
             p = self.thoughts_notes_path
-            if p.exists():
-                data = json.loads(p.read_text(encoding="utf-8"))
+            data = self._read_json_file(p)
+            if data is not None:
                 if isinstance(data, dict):
                     notes = data.get("notes")
                     if isinstance(notes, dict):
@@ -512,7 +944,6 @@ class XavierHubPlugin(Star):
         return {}
 
     def _normalize_note_fields(self, raw) -> dict:
-        """字段贴纸：field_key -> text（最多80字）"""
         out = {}
         if not isinstance(raw, dict):
             return out
@@ -557,33 +988,63 @@ class XavierHubPlugin(Star):
                     continue
                 if not txt and not fields:
                     continue
-                items.append({
+                row = {
                     "id": tid,
                     "text": txt,
                     "fields": fields,
                     "updated_at": v.get("updated_at") or int(time.time() * 1000),
                     "thoughts": v.get("thoughts") if isinstance(v.get("thoughts"), dict) else {},
-                })
+                }
+                if v.get("notified_at"):
+                    row["notified_at"] = v.get("notified_at")
+                items.append(row)
             items.sort(key=lambda x: x.get("updated_at") or 0, reverse=True)
             items = items[:200]
             payload = {
                 "updated_at": int(time.time() * 1000),
                 "notes": {x["id"]: x for x in items},
             }
-            self.thoughts_notes_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            self._write_json_file(self.thoughts_notes_path, payload)
         except Exception as e:
             logger.error(f"[XavierHub] save notes failed: {e}")
 
-    def _notes_prompt_block(self) -> str:
-        """把用户最近贴的便签/字段贴纸塞进 system，让角色能看见"""
+    def _thought_sess_map(self) -> dict:
+        """心声 id -> 所属会话哈希（旧数据没有会话信息，不在表里）"""
+        data = self._read_state_for_read()
+        out = {}
+        if data.get("sess") and isinstance(data.get("thoughts"), dict):
+            out[self._thought_item_id(data.get("updated_at"), data.get("thoughts"))] = data.get("sess")
+        for item in data.get("history") or []:
+            if not isinstance(item, dict) or not item.get("sess"):
+                continue
+            tid = item.get("id") or self._thought_item_id(item.get("updated_at"), item.get("thoughts") or {})
+            out[str(tid)] = item.get("sess")
+        return out
+
+    def _notes_prompt_block(self, sess: str = None) -> str:
         notes = self._load_notes()
         if not notes:
             return ""
+        pending = any(
+            isinstance(v, dict) and self._note_has_content(v) and not v.get("notified_at")
+            for v in notes.values()
+        )
+        if not pending:
+            return ""
+        owners = self._thought_sess_map() if sess else {}
+
+        def _visible(key, note):
+            owner = owners.get(str(note.get("id") or key))
+            return (not sess) or (not owner) or owner == sess
+
         items = sorted(
-            [v for v in notes.values() if isinstance(v, dict) and self._note_has_content(v)],
+            [
+                v for k, v in notes.items()
+                if isinstance(v, dict)
+                and self._note_has_content(v)
+                and not v.get("notified_at")
+                and _visible(k, v)
+            ],
             key=lambda x: x.get("updated_at") or 0,
             reverse=True,
         )[:5]
@@ -606,7 +1067,6 @@ class XavierHubPlugin(Star):
                 for fk, ftxt in fields.items():
                     raw_val = str(t.get(fk) or "").strip()
                     if not raw_val:
-                        # 兼容旧别名
                         for ak in LEGACY_THOUGHT_ALIASES.get(fk, ()):
                             raw_val = str(t.get(ak) or "").strip()
                             if raw_val:
@@ -628,13 +1088,10 @@ class XavierHubPlugin(Star):
                     lines.append(f"{head}她对着整条「{snippet}」写：{whole}")
                 else:
                     lines.append(f"{head}她写在整条心声上：{whole}")
-            if not fields and not whole:
-                continue
         lines.append("（这些便签她希望你看见；聊天里可以自然回应，不要复读系统字样）\n")
         return "\n".join(lines)
 
     def _get_thoughts_instruction(self) -> str:
-        """从插件配置读取心声模板；空则回退默认。"""
         raw = ""
         try:
             raw = str(self.plugin_cfg.get("thoughts_instruction", "") or "")
@@ -643,13 +1100,10 @@ class XavierHubPlugin(Star):
         raw = raw.strip()
         if not raw:
             return DEFAULT_THOUGHTS_INSTRUCTION
-        # 保证拼到 system_prompt 时有分隔
         return raw if raw.startswith("\n") else ("\n" + raw)
-
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def _capture_runtime(self, event: AstrMessageEvent):
-        """缓存主事件循环 + CQ bot，供网页便签伪装消息用"""
         try:
             self._main_loop = asyncio.get_running_loop()
         except Exception:
@@ -658,7 +1112,6 @@ class XavierHubPlugin(Star):
             bot = getattr(event, "bot", None)
             if bot is not None and hasattr(bot, "send_private_msg"):
                 self._cqhttp_bot = bot
-            # 有些链路 self_id 在 message_obj
             sid = None
             try:
                 sid = str(getattr(event.message_obj, "self_id", "") or "")
@@ -666,6 +1119,10 @@ class XavierHubPlugin(Star):
                 sid = ""
             if sid and sid not in ("0", "None"):
                 self._bot_qq_id = sid
+        except Exception:
+            pass
+        try:
+            self._ensure_meals_task()
         except Exception:
             pass
 
@@ -724,7 +1181,6 @@ class XavierHubPlugin(Star):
         return self._cqhttp_bot is not None and bool(self._bot_qq_id)
 
     async def _inject_note_as_user_message(self, tid: str, note_text: str, thoughts=None, field: str = ""):
-        """把便签伪装成用户发来的私聊，走正常对话链路"""
         if not self._note_notify_enabled:
             return
         note_text = str(note_text or "").strip()
@@ -767,7 +1223,42 @@ class XavierHubPlugin(Star):
             else:
                 prompt = f"【心声便签】我刚在你心声上贴了一句：{note_text}"
 
-        uid = str(self.target_user_id or "").strip() or "0"
+        # ==========================================================
+        # 核心提取：自动从「回复目标QQ」或「UMO」中获取你的真实 QQ 号
+        # ==========================================================
+        raw_uid = ""
+        # 1. 尝试读取网页配置项里的回复目标 QQ 号字段
+        for k in (
+            "note_notify_user_id",
+            "note_reply_target_user_id",
+            "note_target_user_id",
+            "note_notify_target_user_id",
+            "reply_target_user_id",
+            "note_target_id",
+            "note_notify_target_id",
+        ):
+            v = self.plugin_cfg.get(k)
+            if v and str(v).strip() and str(v).strip() != "0":
+                raw_uid = str(v).strip()
+                break
+
+        # 2. 如果配置项键名未匹配上，直接从 UMO (沈星回:FriendMessage:1738076005) 提取末尾 QQ 号
+        if not raw_uid:
+            umo = str(self._note_notify_umo or self.plugin_cfg.get("note_notify_umo", "") or "").strip()
+            if umo and ":" in umo:
+                last_part = umo.split(":")[-1].strip()
+                if last_part.isdigit() and last_part != "0":
+                    raw_uid = last_part
+
+        # 3. 最后回退 target_user_id
+        if not raw_uid:
+            raw_uid = self.target_user_id or ""
+
+        uid = str(raw_uid).strip()
+        if not uid or uid == "0":
+            logger.warning("[XavierHub] note notify skipped: 便签注入目标ID为空，无法确定发送给谁")
+            return
+
         try:
             payload = {
                 "post_type": "message",
@@ -799,55 +1290,295 @@ class XavierHubPlugin(Star):
                 return
             await handler(fake_event)
             logger.info(f"[XavierHub] note injected as user msg | tid={tid} | text={note_text[:40]}")
+            await asyncio.to_thread(self._mark_note_notified, tid)
         except Exception as e:
             logger.error(f"[XavierHub] inject note failed: {e}")
 
+    def _mark_note_notified(self, tid: str):
+        tid = str(tid or "").strip()
+        if not tid:
+            return
+        try:
+            with self._io_lock:
+                data = self._read_json_file(self.thoughts_notes_path)
+                if not isinstance(data, dict):
+                    return
+                notes = data.get("notes")
+                if not isinstance(notes, dict):
+                    return
+                item = notes.get(tid)
+                if not isinstance(item, dict):
+                    return
+                item["notified_at"] = int(time.time() * 1000)
+                notes[tid] = item
+                data["notes"] = notes
+                self._write_json_file(self.thoughts_notes_path, data)
+            logger.debug(f"[XavierHub] note marked notified | tid={tid}")
+        except Exception as e:
+            logger.warning(f"[XavierHub] mark note notified failed: {e}")
+
     def notify_note_posted(self, tid: str, note_text: str, thoughts=None, field: str = ""):
-        """供 HTTP 线程调用：排队注入"""
         try:
             self._schedule_coro(self._inject_note_as_user_message(tid, note_text, thoughts, field=field))
         except Exception as e:
             logger.warning(f"[XavierHub] notify_note_posted failed: {e}")
 
+    # ==========================================
+    # 模式识别 (last_n / none / all)
+    # ==========================================
+    def _get_history_mode(self) -> str:
+        """规范化获取上下文模式，兼容 lastn、last_n、none、all"""
+        raw = str(self.plugin_cfg.get("thoughts_history_mode", "last_n") or "last_n").lower().strip()
+        norm = raw.replace("-", "").replace("_", "")
+        if norm in ("lastn", "last"):
+            return "last_n"
+        if norm in ("none", "no", "off"):
+            return "none"
+        if norm in ("all", "full"):
+            return "all"
+        return "last_n"
 
-    # ======== 心声后端：注入/提取/剥离 ========
+    def _get_history_n(self) -> int:
+        """last_n 模式注入几轮。配置项是 thoughts_history_n；旧键名 thoughts_history_keep_count 兼容读取。"""
+        raw = self.plugin_cfg.get("thoughts_history_n", None)
+        if raw is None or str(raw).strip() == "":
+            raw = self.plugin_cfg.get("thoughts_history_keep_count", 3)
+        try:
+            n = int(raw)
+        except Exception:
+            n = 3
+        return max(0, min(n, 20))
 
-    @filter.on_llm_request()
-    async def inject_thoughts_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
-        """注入 <xavier_thoughts> 强制指令"""
-        if not self._should_process(event):
+    # ==========================================
+    # 会话 / 对话范围（隔离心声注入用）
+    # ==========================================
+    @staticmethod
+    def _hash_key(*parts) -> str:
+        raw = "\x1f".join(str(p or "") for p in parts)
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+    def _scope_key(self, umo: str, cid: str) -> str:
+        """会话 + 对话 ID。/new、/reset 会换对话 ID，自然就是新的范围。
+        存哈希而不存原文，因为前端接口默认对外开放，原文里有 QQ 号 / 群号。"""
+        return self._hash_key("scope", umo, cid)
+
+    def _sess_key(self, umo: str) -> str:
+        return self._hash_key("sess", umo)
+
+    async def _resolve_cid(self, umo: str, req) -> str:
+        conv = getattr(req, "conversation", None)
+        cid = str(getattr(conv, "cid", "") or "") if conv is not None else ""
+        if cid:
+            return cid
+        try:
+            mgr = getattr(self.context, "conversation_manager", None)
+            if mgr is not None:
+                return str(await mgr.get_curr_conversation_id(umo) or "")
+        except Exception as e:
+            logger.debug(f"[XavierHub] get current conversation id failed: {e}")
+        return ""
+
+    @staticmethod
+    def _conversation_is_fresh(req) -> bool:
+        """这段对话在数据库里还没有任何正式消息（新对话，或旧版本 /reset 清空了历史）。"""
+        conv = getattr(req, "conversation", None)
+        raw = getattr(conv, "history", None) if conv is not None else None
+        items = None
+        if isinstance(raw, str):
+            try:
+                items = json.loads(raw) if raw.strip() else []
+            except Exception:
+                items = None
+        elif isinstance(raw, list):
+            items = raw
+        if items is None:
+            items = [
+                m for m in (getattr(req, "contexts", None) or [])
+                if not (isinstance(m, dict) and m.get("_no_save"))
+            ]
+        # 只要历史消息中还没有任何一条 assistant (AI) 的正式回复，就判定为新会话第一轮
+        for m in (items or []):
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            if role == "assistant":
+                return False
+        return True
+
+    def _load_scopes(self) -> dict:
+        data = self._read_json_file(self.thoughts_scopes_path, {}) or {}
+        scopes = data.get("scopes") if isinstance(data, dict) else None
+        return scopes if isinstance(scopes, dict) else {}
+
+    def _touch_scope_sync(self, scope: str, umo: str, cid: str, fresh: bool) -> int:
+        """登记对话范围并返回它的起点时间。fresh=True 时起点改成现在，之前的心声不再注入。"""
+        with self._io_lock:
+            if self._scopes_cache is None:
+                self._scopes_cache = self._load_scopes()
+            scopes = self._scopes_cache
+            now = int(time.time() * 1000)
+            entry = scopes.get(scope)
+            changed = False
+            # 起点要晚于这个范围里已有的所有心声，同一毫秒内发生的也不会被算进新对话
+            new_epoch = max(now, self._latest_scope_ts(scope) + 1) if fresh else 0
+            if not isinstance(entry, dict):
+                entry = {"umo": umo, "cid": cid, "epoch": new_epoch, "created_at": now}
+                scopes[scope] = entry
+                changed = True
+            elif fresh:
+                entry["epoch"] = new_epoch
+                changed = True
+            if changed:
+                entry["touched_at"] = now
+                if len(scopes) > 500:
+                    ordered = sorted(
+                        scopes.items(),
+                        key=lambda kv: (kv[1] or {}).get("touched_at") or 0,
+                        reverse=True,
+                    )
+                    self._scopes_cache = dict(ordered[:400])
+                self._write_json_file(
+                    self.thoughts_scopes_path,
+                    {"version": 1, "scopes": self._scopes_cache},
+                )
+            return _num(entry.get("epoch"))
+
+    def _latest_scope_ts(self, scope: str) -> int:
+        """这个范围里最新一条心声的时间（历史按新到旧排列，找到第一条就是最大的）。"""
+        data = self._read_state_for_read()
+        if data.get("scope") == scope:
+            return _num(data.get("updated_at"))
+        for item in data.get("history") or []:
+            if isinstance(item, dict) and item.get("scope") == scope:
+                return _num(item.get("updated_at"))
+        return 0
+
+    def _warn_leftover_xt(self, req, scope: str):
+        """none/last_n 模式下，历史里如果还有旧的 <xt>，只提醒，不动历史。"""
+        if scope in self._leftover_warned:
             return
-        text = event.message_str or ""
-        if self._is_command_or_system(text):
-            return
-        req.system_prompt = (req.system_prompt or "") + self._get_thoughts_instruction() + self._notes_prompt_block()
+        for m in getattr(req, "contexts", None) or []:
+            if not isinstance(m, dict) or m.get("role") != "assistant":
+                continue
+            content = m.get("content")
+            texts = []
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        texts.append(part["text"])
+            if any(_has_xt_tag(t) for t in texts):
+                self._leftover_warned.add(scope)
+                logger.warning(
+                    "[XavierHub] 这段对话的历史里还留着以前的 <xt>（all 模式或旧版本写进去的）。"
+                    "插件不会改动历史记录，想要干净的上下文，请在这个会话里发一次 /new。"
+                )
+                return
 
-    def _parse_thoughts_json(self, raw: str):
-        """尽量从标签内容里抠出合法 JSON dict；失败返回 None（绝不写「解析失败」）。"""
-        if not raw:
-            return None
-        s = str(raw).strip()
-        # 去掉 ```json ... ``` 包裹
+    # ==========================================
+    # 心声读取 / 记录
+    # ==========================================
+    def _collect_scope_thoughts(self, scope: str, epoch: int, limit: int) -> list:
+        data = self._read_state_for_read()
+        out = []
+        latest = data.get("thoughts")
+        if (
+            data.get("scope") == scope
+            and _num(data.get("updated_at")) >= epoch
+            and _thought_has_content(latest)
+        ):
+            out.append(latest)
+        for item in data.get("history") or []:
+            if len(out) >= limit:
+                break
+            if not isinstance(item, dict) or item.get("scope") != scope:
+                continue
+            if _num(item.get("updated_at")) < epoch:
+                continue
+            t = item.get("thoughts")
+            if _thought_has_content(t):
+                out.append(t)
+        return out[:limit]
+
+    def _build_recent_thoughts_prompt(self, scope: str, epoch: int, keep_count: int) -> str:
+        """只取当前会话、当前对话里的最近 N 轮心声，拼成系统提示词（仅 last_n 模式）。"""
+        if keep_count <= 0:
+            return ""
+        recent = self._collect_scope_thoughts(scope, epoch, keep_count)
+        if not recent:
+            return ""
+        lines = ["\n【你的近期内心活动记忆】（仅作前情回顾，帮助你保持情绪连贯，无需在本次回复中复述）："]
+        total = len(recent)
+        # 旧的在前、新的在后
+        for i, t in enumerate(reversed(recent)):
+            norm = self._normalize_thoughts(t)
+            lines.append(f"倒数第 {total - i} 轮心声: <xt>{json.dumps(norm, ensure_ascii=False)}</xt>")
+        return "\n".join(lines)
+
+    def _latest_thought_for_sess(self, sess: str):
+        data = self._read_state_for_read()
+        if data.get("sess") == sess and _thought_has_content(data.get("thoughts")):
+            return data.get("thoughts")
+        for item in data.get("history") or []:
+            if isinstance(item, dict) and item.get("sess") == sess and _thought_has_content(item.get("thoughts")):
+                return item.get("thoughts")
+        return None
+
+    def _record_thoughts_sync(self, thoughts: dict, turn: "_TurnMarker"):
+        """写入前端用的心声状态文件：新的一条放最前，上一条挪进历史（全量保留）。
+        同一轮里模型输出了两次心声（比如工具调用前后），只保留最后一次。"""
+        with self._io_lock:
+            prior = self._read_state_for_update()
+            now = max(int(time.time() * 1000), _num(turn.epoch))
+            history = [h for h in (prior.get("history") or []) if isinstance(h, dict)]
+            prev_thoughts = prior.get("thoughts") if isinstance(prior.get("thoughts"), dict) else {}
+            prev_updated = prior.get("updated_at")
+            same_turn = (
+                turn.recorded_at is not None
+                and prev_updated == turn.recorded_at
+                and prior.get("scope") == turn.scope
+            )
+            if not same_turn and _thought_has_content(prev_thoughts) and not _is_garbage_thought(prev_thoughts):
+                item = {
+                    "id": self._thought_item_id(prev_updated, prev_thoughts),
+                    "updated_at": prev_updated,
+                    "thoughts": prev_thoughts,
+                }
+                for k in ("scope", "sess"):
+                    if prior.get(k):
+                        item[k] = prior[k]
+                history.insert(0, item)
+            history = [
+                h for h in history
+                if not _is_garbage_thought(h.get("thoughts") if isinstance(h.get("thoughts"), dict) else {})
+            ]
+            if len(history) > 300:
+                history = history[:300]
+            data = dict(prior)
+            data.update({
+                "updated_at": now,
+                "thoughts": thoughts,
+                "scope": turn.scope,
+                "sess": turn.sess,
+                "history": history,
+            })
+            self._write_json_file(self.thoughts_state_path, data)
+            turn.recorded_at = now
+
+    # ======== 心声解析 ========
+
+    def _parse_thoughts_json(self, raw_str: str) -> dict:
+        """从标签内容里尽量抠出心声字典：去代码块、容忍中文引号和尾逗号，实在不行按字段名逐个找。"""
+        if not raw_str:
+            return {}
+        raw = str(raw_str)
+        s = raw.strip()
         if s.startswith("```"):
             s = re.sub(r"^```(?:json|JSON)?\s*", "", s)
-            s = re.sub(r"\s*```$", "", s)
-            s = s.strip()
-        # 优先取最外层大括号片段（防止标签里混进正文）
+            s = re.sub(r"\s*```$", "", s).strip()
         if "{" in s and "}" in s:
-            start = s.find("{")
-            end = s.rfind("}")
+            start, end = s.find("{"), s.rfind("}")
             if end > start:
-                s = s[start : end + 1]
-        # 常见脏字符
-        s = (
-            s.replace("\u201c", '"')
-            .replace("\u201d", '"')
-            .replace("\u2018", "'")
-            .replace("\u2019", "'")
-            .replace("\ufeff", "")
-        )
-        # 尾逗号 ,}  ,]
-        s = re.sub(r",\s*([}\]])", r"\1", s)
+                s = s[start:end + 1]
 
         def _try_load(txt: str):
             try:
@@ -859,143 +1590,645 @@ class XavierHubPlugin(Star):
         obj = _try_load(s)
         if obj is not None:
             return obj
+        s2 = (
+            s.replace("\u201c", '"').replace("\u201d", '"')
+            .replace("\u2018", "'").replace("\u2019", "'")
+            .replace("\ufeff", "")
+        )
+        s2 = re.sub(r",\s*([}\]])", r"\1", s2)
+        obj = _try_load(s2)
+        if obj is not None:
+            return obj
 
-        # 宽松：按字段正则抠（键名可能是 兔言兔语/无厘头 等）
-        keys = list(getattr(self, "thought_keys", None) or DEFAULT_THOUGHT_KEYS)
-        # 也扫别名
-        alias_flat = set(keys)
-        for k in keys:
-            for a in LEGACY_THOUGHT_ALIASES.get(k, ()):
-                alias_flat.add(a)
+        # 宽松兜底：按字段名（含旧别名）逐个抠
+        names = set(self._get_thought_keys())
+        alias_map = getattr(self, "thought_aliases", None) or LEGACY_THOUGHT_ALIASES
+        for k in list(names):
+            for a in alias_map.get(k, ()) or ():
+                names.add(a)
         recovered = {}
-        for key in alias_flat:
-            # "键": "值" —— 拼接正则，避免转义地狱
+        for key in names:
             pat = (
-                r'["\']' + re.escape(key) + r'["\']\s*:\s*'
-                r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[^,\n\r}]+)'
+                r'["\'\u201c\u201d]' + re.escape(key) + r'["\'\u201c\u201d]\s*[:\uff1a]\s*'
+                r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\u201c[^\u201d]*\u201d|[^,\n\r}]+)'
             )
             m = re.search(pat, raw, re.DOTALL)
             if not m:
                 continue
             val = m.group(1).strip()
-            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            if val.startswith('"') and val.endswith('"') and len(val) >= 2:
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    val = val[1:-1]
+            elif len(val) >= 2 and val[0] in "'\u201c" and val[-1] in "'\u201d":
                 val = val[1:-1]
-            val = val.strip().rstrip(",").strip()
+            val = str(val).strip().rstrip(",").strip()
             if val:
                 recovered[key] = val
-        if recovered:
-            return recovered
-        return None
+        return recovered
 
-    @filter.on_llm_response()
-    async def extract_thoughts(self, event: AstrMessageEvent, resp: LLMResponse):
-        """从回复中提取心声，写入 hub 自己的 state；提取后直接从正文删标签"""
+    def _extract_thoughts(self, text: str) -> dict:
+        """取最后一个能解析出内容的 <xt> 块。"""
+        for m in reversed(list(_XT_CAPTURE_RE.finditer(text or ""))):
+            body = (m.group(1) or "").strip()
+            if not body:
+                continue
+            parsed = self._parse_thoughts_json(body)
+            if not parsed:
+                continue
+            normalized = self._normalize_thoughts(parsed)
+            if _thought_has_content(normalized) and not _is_garbage_thought(normalized):
+                return normalized
+        return {}
+
+    # ======== 心声后端：注入 ========
+
+    @filter.on_llm_request()
+    async def inject_thoughts_instruction(self, event: AstrMessageEvent, req: ProviderRequest):
+        """注入心声指令、三餐/便签；last_n 模式再注入本会话本对话的最近 N 轮心声。
+        不改 req.contexts。"""
         if not self._should_process(event):
+            return
+        mode = self._get_history_mode()
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        cid = await self._resolve_cid(umo, req)
+        scope = self._scope_key(umo, cid)
+        sess = self._sess_key(umo)
+        turn = _TurnMarker(req, umo, cid, scope, sess, mode)
+        try:
+            event.set_extra(TURN_EXTRA_KEY, turn)
+        except Exception as e:
+            logger.warning(f"[XavierHub] 无法给事件打标记，本轮心声不会记录: {e}")
+
+        has_conv = getattr(req, "conversation", None) is not None
+        fresh = has_conv and self._conversation_is_fresh(req)
+        try:
+            turn.epoch = await asyncio.to_thread(self._touch_scope_sync, scope, umo, cid, fresh)
+        except Exception as e:
+            logger.warning(f"[XavierHub] 记录对话范围失败: {e}")
+            turn.epoch = int(time.time() * 1000) if fresh else 0
+
+        if mode in ("none", "last_n") and has_conv and not fresh:
+            self._warn_leftover_xt(req, scope)
+
+        # 1. 心声输出指令
+        req.system_prompt = (req.system_prompt or "") + self._get_thoughts_instruction()
+
+        # 2. 今日三餐灵感（若启用）
+        meals_block = self._meals_prompt_block()
+        if meals_block:
+            req.system_prompt += meals_block
+
+        # 3. 便签提醒（只带本会话心声上的便签）
+        try:
+            notes_block = await asyncio.to_thread(self._notes_prompt_block, sess)
+        except Exception as e:
+            logger.debug(f"[XavierHub] build notes block failed: {e}")
+            notes_block = ""
+        if notes_block:
+            req.system_prompt += notes_block
+
+        # 4. 只有 last_n 注入近期心声；none 和 all 都不注入
+        if mode == "last_n":
+            keep_count = self._get_history_n()
+            if keep_count > 0:
+                try:
+                    recent_prompt = await asyncio.to_thread(
+                        self._build_recent_thoughts_prompt, scope, turn.epoch, keep_count
+                    )
+                except Exception as e:
+                    logger.warning(f"[XavierHub] 读取近期心声失败: {e}")
+                    recent_prompt = ""
+                if recent_prompt:
+                    req.system_prompt += recent_prompt
+
+    # ======== 心声后端：Runner 拦截回调 ========
+
+    def _runner_event_turn(self, runner):
+        rc = getattr(runner, "run_context", None)
+        agent_ctx = getattr(rc, "context", None)
+        event = getattr(agent_ctx, "event", None)
+        if event is None:
+            return None, None
+        turn = None
+        try:
+            marker = event.get_extra(TURN_EXTRA_KEY)
+            if isinstance(marker, _TurnMarker) and marker.matches(getattr(runner, "req", None)):
+                turn = marker
+        except Exception:
+            turn = None
+        return event, turn
+
+    def _guard_wants(self, event, turn) -> bool:
+        if turn is not None:
+            return True
+        # 没打标记的请求（非目标用户、子 Agent、其他插件发起的等）：
+        # 在允许的会话里照样清洗，不记录心声
+        try:
+            return self._is_session_allowed(event)
+        except Exception:
+            return False
+
+    def _stream_state(self, runner, create: bool):
+        try:
+            st = self._stream_states.get(runner)
+            if st is None and create:
+                st = _XtStreamFilter()
+                self._stream_states[runner] = st
+            return st
+        except TypeError:
+            return None
+
+    def _guard_stream_begin(self, runner):
+        try:
+            self._stream_states.pop(runner, None)
+        except TypeError:
+            pass
+
+    def _filter_stream_chunk(self, runner, resp):
+        if getattr(resp, "_xavier_hub_chunk_done", False):
+            return
+        _mark(resp, "_xavier_hub_chunk_done")
+        st = self._stream_state(runner, create=True)
+        if st is None:
+            return
+        chain_obj = getattr(resp, "result_chain", None)
+        comps = getattr(chain_obj, "chain", None) if chain_obj is not None else None
+        if isinstance(comps, list):
+            kept = []
+            for comp in comps:
+                if isinstance(comp, Plain):
+                    text = st.feed(comp.text or "")
+                    if text:
+                        comp.text = text
+                        kept.append(comp)
+                elif not st.in_xt:
+                    kept.append(comp)
+            if kept:
+                chain_obj.chain = kept
+            else:
+                resp.result_chain = None
+                resp.completion_text = ""
+            return
+        if chain_obj is None:
+            text = resp.completion_text
+            if isinstance(text, str) and text:
+                resp.completion_text = st.feed(text)
+
+    def _finish_stream(self, runner):
+        st = self._stream_state(runner, create=False)
+        if st is None or not st.active:
+            return None
+        tail = st.finish()
+        if not tail:
+            return None
+        try:
+            chunk = LLMResponse("assistant", is_chunk=True)
+            chunk.result_chain = MessageChain(chain=[Plain(tail)])
+            _mark(chunk, "_xavier_hub_chunk_done")
+            return [chunk]
+        except Exception as e:
+            logger.debug(f"[XavierHub] flush stream tail failed: {e}")
+            return None
+
+    async def _guard_on_response(self, runner, resp):
+        event, turn = self._runner_event_turn(runner)
+        if event is None or not self._guard_wants(event, turn):
+            return None
+        if getattr(resp, "is_chunk", False):
+            self._filter_stream_chunk(runner, resp)
+            return None
+        extra = self._finish_stream(runner)
+        await self._process_final_response(resp, event, turn)
+        return extra
+
+    async def _guard_on_final(self, runner, resp):
+        event, turn = self._runner_event_turn(runner)
+        if event is None or not self._guard_wants(event, turn):
+            return
+        await self._process_final_response(resp, event, turn)
+
+    async def _guard_after_final(self, runner, resp):
+        """助手消息已经进了上下文，再把响应对象上的心声清掉，之后发往聊天框的内容就是干净的。
+        none/last_n 在进上下文之前就清过了，这一步主要照顾 all 模式：上下文里的原文不受影响，
+        其他插件的 on_llm_response 也仍然能看到完整原文（它们在这之前执行）。"""
+        if resp is None or getattr(resp, "_xavier_hub_display_clean", False):
+            return
+        _mark(resp, "_xavier_hub_display_clean")
+        event, turn = self._runner_event_turn(runner)
+        if event is None or not self._guard_wants(event, turn):
+            return
+        if getattr(resp, "role", None) != "assistant":
             return
         try:
             text = resp.completion_text or ""
-            # 取最后一个完整标签，避免正文里误出现半截标签时抓错
-            matches = list(re.finditer(r"<xavier_thoughts>(.*?)</xavier_thoughts>", text, re.DOTALL | re.IGNORECASE))
-            if not matches:
-                return
-            thoughts_str = matches[-1].group(1).strip()
-            thoughts = self._parse_thoughts_json(thoughts_str)
-            if not isinstance(thoughts, dict) or not thoughts:
-                # 解析失败：不写 state、不污染历史；只打日志
-                logger.warning(
-                    f"[XavierHub] thoughts JSON parse skipped | raw_preview={thoughts_str[:120]!r}"
-                )
-                return
-            # 规范化字段，缺的补空
-            thoughts = self._normalize_thoughts(thoughts)
-            # 若五个字段全空，也跳过
-            if not any(str(thoughts.get(k) or "").strip() for k in (getattr(self, "thought_keys", None) or DEFAULT_THOUGHT_KEYS)):
-                logger.warning("[XavierHub] thoughts empty after normalize, skip")
-                return
-            # 保留历史（不要把「解析失败」类脏数据推进 history）
-            prior = self._load_thoughts()
-            history = prior.get("history") or []
-            prev_thoughts = prior.get("thoughts") or {}
-            prev_updated = prior.get("updated_at")
-            keys = list(getattr(self, "thought_keys", None) or DEFAULT_THOUGHT_KEYS)
-            prev_ok = any(str(prev_thoughts.get(k) or "").strip() for k in keys)
-            prev_is_garbage = (
-                str(prev_thoughts.get("兔在想") or "").strip() == "解析失败"
-                or (
-                    str(prev_thoughts.get("情绪") or "").strip() == "混乱"
-                    and "解析失败" in str(prev_thoughts.get("兔在想") or "")
-                )
-            )
-            if prev_ok and not prev_is_garbage:
-                history.insert(0, {
-                    "id": self._thought_item_id(prev_updated, prev_thoughts),
-                    "updated_at": prev_updated,
-                    "thoughts": prev_thoughts,
-                })
-            # 顺带清掉历史里已有的解析失败垃圾
-            clean_hist = []
-            for item in history:
-                if not isinstance(item, dict):
-                    continue
-                t = item.get("thoughts") if isinstance(item.get("thoughts"), dict) else {}
-                if str(t.get("兔在想") or "").strip() == "解析失败":
-                    continue
-                if str(t.get("情绪") or "").strip() == "混乱" and "解析失败" in str(t.get("兔在想") or ""):
-                    continue
-                clean_hist.append(item)
-            history = clean_hist[:30]
-            data = {
-                "updated_at": int(time.time() * 1000),
-                "thoughts": thoughts,
-                "history": history,
-            }
-            self.thoughts_state_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
+        except Exception:
+            return
+        if not _has_xt_tag(text) or not strip_xt_text(text).strip():
+            # 只有心声、没有正文时保持原样，免得这一轮被当成空回复而不保存；聊天框由发送前清洗兜住
+            return
+        _strip_xt_from_response(resp)
+
+    async def _process_final_response(self, resp, event, turn):
+        """先把心声存下来（前端任何模式都有数据），再按模式决定要不要从响应里拿掉。"""
+        if resp is None or getattr(resp, "_xavier_hub_done", False):
+            return
+        _mark(resp, "_xavier_hub_done")
+        if getattr(resp, "role", None) != "assistant":
+            return
+        try:
+            text = resp.completion_text or ""
+        except Exception:
+            return
+        if not _has_xt_tag(text):
+            return
+        mode = turn.mode if turn is not None else self._get_history_mode()
+        if turn is not None:
+            thoughts = self._extract_thoughts(text)
+            if thoughts:
+                try:
+                    await asyncio.to_thread(self._record_thoughts_sync, thoughts, turn)
+                except Exception as e:
+                    logger.error(f"[XavierHub] 保存心声失败: {e}")
+            else:
+                m = _XT_CAPTURE_RE.search(text)
+                preview = (m.group(1) if m else text)[:120]
+                logger.warning(f"[XavierHub] 心声没能解析，本轮不记录 | {preview!r}")
+        if mode in ("none", "last_n"):
+            _strip_xt_from_response(resp)
+
+    # ======== 心声后端：兜底提取 / 发送前清洗 ========
+
+    @filter.on_llm_response(priority=10)
+    async def extract_thoughts(self, event: AstrMessageEvent, resp: LLMResponse):
+        """兜底。正常情况下 Runner 拦截已经处理过这条响应，这里直接跳过。
+        拦截没装上时才在这里记录心声并按模式剥离 completion_text：
+        这在 AstrBot 4.10 及以前能挡住上下文；4.11 以后只能保证前端有数据和聊天框干净。"""
+        if resp is None or getattr(resp, "_xavier_hub_done", False):
+            return
+        turn = None
+        try:
+            marker = event.get_extra(TURN_EXTRA_KEY)
+            if isinstance(marker, _TurnMarker):
+                turn = marker
+        except Exception:
+            turn = None
+        if turn is None and not self._should_process(event):
+            return
+        try:
+            await self._process_final_response(resp, event, turn)
         except Exception as e:
             logger.error(f"[XavierHub] extract thoughts failed: {e}")
-        # 注意：不要在这里改 resp.completion_text。
-        # 对话历史依赖 completion_text；心声标签需要进历史/对话数据。
-        # 聊天框剥离只在 on_decorating_result 做。
 
     def _strip_thoughts_text(self, text: str) -> str:
-        """从可见文本里去掉心声标签，不影响其它内容。"""
-        if not text:
-            return text or ""
-        cleaned = re.sub(
-            r"<xavier_thoughts>.*?</xavier_thoughts>",
-            "",
-            str(text),
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        # 标签去掉后可能留下多余空行
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-        return cleaned
+        """剥除 <xt> 标签及其内容（保留给旧代码调用）"""
+        return strip_xt_text(text or "")
 
     @filter.on_decorating_result(priority=50)
     async def strip_thoughts_from_result(self, event: AstrMessageEvent):
-        """发送前剔除心声标签（不影响对话历史）。
-
-        priority=50：必须早于 active_function 的 reply/recall/poke（15/12/11/10）。
-        带 [reply]/[recall] 时那些 handler 会改用 event extra 里的原文接管发送，
-        只清 result.chain 不够，还要把 extra 里的缓存原文一并洗净。
-        """
-        if not self._should_process(event):
-            return
-
-        # 1) 消息链（普通发送路径）
+        """发送前清洗，三种模式都做，聊天框里不出现心声。
+        换成新的 Plain 对象，不去改动 Runner 里的原文（all 模式要靠原文留在上下文里）。
+        priority=50：要早于 active_function 的 reply/recall/poke（15/12/11/10）。"""
         result = event.get_result()
-        if result and result.chain:
-            for comp in result.chain:
-                if isinstance(comp, Plain) and comp.text:
-                    comp.text = self._strip_thoughts_text(comp.text)
+        comps = getattr(result, "chain", None) if result is not None else None
+        if isinstance(comps, list) and comps and _components_have_xt(comps):
+            result.chain = _strip_xt_in_components(comps, copy_plain=True)
 
-        # 2) active_function 接管发送时用的原文缓存
         for key in ("_active_func_original_text", "_recall_full_text"):
             raw = event.get_extra(key)
-            if isinstance(raw, str) and raw and "<xavier_thoughts>" in raw.lower():
-                event.set_extra(key, self._strip_thoughts_text(raw))
+            if isinstance(raw, str) and _has_xt_tag(raw):
+                event.set_extra(key, strip_xt_text(raw))
+
+        # 监听 /reset 执行成功（官方标记），彻底切断该会话的旧心声
+        if event.get_extra("_clean_group_context_session"):
+            try:
+                umo = str(getattr(event, "unified_msg_origin", "") or "")
+                cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                scope = self._scope_key(umo, cid)
+                await asyncio.to_thread(self._touch_scope_sync, scope, umo, cid, True)
+                logger.info(f"[Xavier_Hub] 检测到 /reset 执行成功，已重置会话 {scope} 的心声起点。")
+            except Exception as e:
+                logger.warning(f"[Xavier_Hub] 重置心声起点失败: {e}")
+
+    # ======== 一日三餐 ========
+    DEFAULT_MEALS_PROMPT = (
+        "你要为「沈星回」这个角色安排今天的一日三餐。有人希望他每天都吃得好、吃得香。\n"
+        "要求：\n"
+        "1. 三餐必须顿顿是热的、有滋味的、看着就馋的。家常可以，但一定要好吃。\n"
+        "2. 优先安排他爱吃的：各种肉（羊排、红烧肉、牛腩、猪肋排、炸鸡、牛排、火锅）、有汤有水的面食（番茄鸡蛋面、老火汤面、萝卜牛肉汤、小面）、香口的主食（生煎包、肉夹馍、芝士焗饭、煲仔饭），可以有甜品甜的（蛋挞、可可面包、芝士奶黄包、冰激凌、草莓、曲奇）。有时候会有他自己做的创新料理，以前做过辣椒炒蓝莓，酸奶油青瓜片，仅供参考不要照抄。\n"
+        "3. 早餐要顶饱、要热，不能只有一杯咖啡；午餐要有肉有菜；晚餐最丰盛，可以有汤。\n"
+        "4. 结合季节安排，天冷偏炖煮暖身，天热偏清爽不油，但都要好吃。不要写天气解说。\n"
+        "5. 用简短好懂的中文菜名，不写做法步骤，不写营养分析，不写精致摆盘和菜谱术语。\n"
+        "6. 每餐 2-3 样，搭配合理，别把三顿写成一样的。\n"
+        "note 写一句很短的、让人觉得这顿饭很香很舒服的实感，比如「汤炖了一下午，肉一咬就脱骨」，可留空。\n"
+        "只输出 JSON，不要任何解释、不要代码块：\n"
+        "{\"breakfast\":{\"dishes\":[\"...\"],\"note\":\"\"},\"lunch\":{\"dishes\":[\"...\"],\"note\":\"\"},\"dinner\":{\"dishes\":[\"...\"],\"note\":\"\"}}"
+    )
+
+    DEFAULT_MEALS_INJECT = (
+        "\n"
+        "【今天给你准备的三餐——只作灵感参考】\n"
+        "{meals}\n"
+        "（有人希望你今天吃得好、吃得香。这是个方向，不是必须照着念的菜单：被问到就可以这么说，也可以换成别的好吃的、加一样、不必完全按照这个吃。不要主动报菜名，不必把它当成每天固定食谱，不要复读这段系统文字。）\n"
+        ""
+    )
+
+    def _meals_enabled(self) -> bool:
+        return bool(self.plugin_cfg.get("meals_enabled", False))
+
+    def _meals_gen_time(self) -> str:
+        raw = str(self.plugin_cfg.get("meals_gen_time", "06:30") or "06:30").strip()
+        if not re.match(r"^\d{1,2}:\d{2}$", raw):
+            return "06:30"
+        try:
+            hh, mm = raw.split(":")
+            hh, mm = int(hh), int(mm)
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                return "06:30"
+            return f"{hh:02d}:{mm:02d}"
+        except Exception:
+            return "06:30"
+
+    def _load_meals(self) -> dict:
+        try:
+            data = self._read_json_file(self.daily_meals_path)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            logger.debug(f"[XavierHub] load meals failed: {e}")
+        return {}
+
+    def _save_meals(self, payload: dict):
+        with self._io_lock:
+            self._save_meals_locked(payload)
+
+    def _save_meals_locked(self, payload: dict):
+        try:
+            old = self._load_meals()
+            recent: list = old.get("recent_dishes") or []
+            old_meals = old.get("meals")
+            if isinstance(old_meals, dict):
+                prev_names = []
+                for slot in old_meals.values():
+                    if isinstance(slot, dict):
+                        for d in (slot.get("dishes") or []):
+                            t = str(d).strip()
+                            if t and t not in prev_names:
+                                prev_names.append(t)
+                if prev_names:
+                    recent.insert(0, prev_names)
+            recent = recent[:3]
+            payload["recent_dishes"] = recent
+            self._write_json_file(self.daily_meals_path, payload)
+        except Exception as e:
+            logger.error(f"[XavierHub] save meals failed: {e}")
+
+    @staticmethod
+    def _today_ymd() -> str:
+        return time.strftime("%Y-%m-%d", time.localtime())
+
+    def _meals_is_today(self, data=None) -> bool:
+        data = data if data is not None else self._load_meals()
+        if not isinstance(data, dict):
+            return False
+        return str(data.get("date") or "") == self._today_ymd() and bool(data.get("meals"))
+
+    def _clean_meal_slot(self, raw) -> dict:
+        dishes, note = [], ""
+        if isinstance(raw, dict):
+            rd = raw.get("dishes")
+            if isinstance(rd, list):
+                for x in rd:
+                    t = str(x or "").strip()
+                    if t:
+                        dishes.append(t[:18])
+            elif isinstance(rd, str):
+                for t in re.split(r"[、,，/|]", rd):
+                    t = t.strip()
+                    if t:
+                        dishes.append(t[:18])
+            note = str(raw.get("note") or "").strip()[:40]
+        elif isinstance(raw, list):
+            for x in raw:
+                t = str(x or "").strip()
+                if t:
+                    dishes.append(t[:18])
+        elif isinstance(raw, str):
+            for t in re.split(r"[、,，/|]", raw):
+                t = t.strip()
+                if t:
+                    dishes.append(t[:18])
+        return {"dishes": dishes[:3], "note": note}
+
+    async def _generate_daily_meals(self, force: bool = False) -> bool:
+        if not self._meals_enabled():
+            return False
+        if not force and self._meals_is_today():
+            return False
+        provider = None
+        try:
+            umo = self._note_notify_umo or None
+            if umo:
+                try:
+                    provider = self.context.get_using_provider(umo=umo)
+                except TypeError:
+                    provider = self.context.get_using_provider()
+            if provider is None:
+                provider = self.context.get_using_provider()
+        except Exception as e:
+            logger.warning(f"[XavierHub] meals: get provider failed: {e}")
+            return False
+        if provider is None:
+            logger.warning("[XavierHub] meals: no LLM provider available")
+            return False
+
+        sys_prompt = str(self.plugin_cfg.get("meals_prompt", "") or "").strip() or self.DEFAULT_MEALS_PROMPT
+        wk = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][time.localtime().tm_wday]
+        avoid_dishes: list[str] = []
+        try:
+            old_data = self._load_meals()
+            cur_meals = old_data.get("meals")
+            if isinstance(cur_meals, dict):
+                for slot in cur_meals.values():
+                    if isinstance(slot, dict):
+                        for d in (slot.get("dishes") or []):
+                            t = str(d).strip()
+                            if t and t not in avoid_dishes:
+                                avoid_dishes.append(t)
+            for batch in (old_data.get("recent_dishes") or []):
+                if isinstance(batch, list):
+                    for d in batch:
+                        t = str(d).strip()
+                        if t and t not in avoid_dishes:
+                            avoid_dishes.append(t)
+        except Exception:
+            pass
+        avoid_hint = ""
+        if avoid_dishes:
+            avoid_hint = "\n以下菜最近刚吃过，这次全部换掉，一个都不要再出现：" + "、".join(avoid_dishes[:18])
+        user_prompt = f"今天是 {self._today_ymd()} {wk}。生成今天的三餐 JSON。{avoid_hint}"
+
+        raw = ""
+        try:
+            resp = await provider.text_chat(system_prompt=sys_prompt, prompt=user_prompt)
+            raw = (getattr(resp, "completion_text", "") or "").strip()
+        except Exception as e:
+            logger.warning(f"[XavierHub] meals: text_chat failed: {e}")
+            return False
+        if not raw:
+            return False
+
+        obj = None
+        try:
+            txt = re.sub(r"^```[a-zA-Z]*|```$", "", raw.strip(), flags=re.M).strip()
+            m = re.search(r"\{.*\}", txt, re.S)
+            if m:
+                obj = json.loads(m.group(0))
+        except Exception as e:
+            logger.warning(f"[XavierHub] meals: parse failed: {e} | raw={raw[:160]}")
+            return False
+        if not isinstance(obj, dict):
+            logger.warning(f"[XavierHub] meals: bad json | raw={raw[:160]}")
+            return False
+
+        meals = {}
+        alias = {
+            "breakfast": ("breakfast", "早餐", "早饭"),
+            "lunch": ("lunch", "午餐", "中饭", "午饭"),
+            "dinner": ("dinner", "晚餐", "晚饭"),
+        }
+        for key, names in alias.items():
+            for n in names:
+                if n in obj:
+                    slot = self._clean_meal_slot(obj.get(n))
+                    if slot["dishes"]:
+                        meals[key] = slot
+                    break
+        if not meals:
+            logger.warning("[XavierHub] meals: nothing usable after clean")
+            return False
+
+        payload = {
+            "date": self._today_ymd(),
+            "generated_at": int(time.time() * 1000),
+            "meals": meals,
+        }
+        self._save_meals(payload)
+        logger.info(
+            "[XavierHub] daily meals generated | "
+            + " | ".join(f"{k}:{'/'.join(v['dishes'])}" for k, v in meals.items())
+        )
+        return True
+
+    def _meals_prompt_block(self) -> str:
+        if not self._meals_enabled():
+            return ""
+        data = self._load_meals()
+        if not self._meals_is_today(data):
+            return ""
+        meals = data.get("meals") or {}
+        label = {"breakfast": "早", "lunch": "午", "dinner": "晚"}
+        rows = []
+        for k in ("breakfast", "lunch", "dinner"):
+            v = meals.get(k)
+            if not isinstance(v, dict):
+                continue
+            dishes = [str(x).strip() for x in (v.get("dishes") or []) if str(x).strip()]
+            if not dishes:
+                continue
+            note = str(v.get("note") or "").strip()
+            line = f"{label[k]}：{'、'.join(dishes)}"
+            if note:
+                line += f"（{note}）"
+            rows.append(line)
+        if not rows:
+            return ""
+        body = "  ".join(rows)
+        tpl = str(self.plugin_cfg.get("meals_inject_template", "") or "").strip()
+        if not tpl:
+            return self.DEFAULT_MEALS_INJECT.replace("{meals}", body)
+        if "{meals}" in tpl:
+            out = tpl.replace("{meals}", body)
+        else:
+            out = tpl + "\n" + body
+        if not out.startswith("\n"):
+            out = "\n" + out
+        if not out.endswith("\n"):
+            out = out + "\n"
+        return out
+
+    async def _meals_scheduler(self):
+        logger.info(f"[XavierHub] meals scheduler started | at {self._meals_gen_time()}")
+        while True:
+            try:
+                await asyncio.sleep(60)
+                if not self._meals_enabled():
+                    continue
+                now = time.strftime("%H:%M", time.localtime())
+                if now != self._meals_gen_time():
+                    continue
+                if self._meals_is_today():
+                    continue
+                await self._generate_daily_meals()
+            except asyncio.CancelledError:
+                logger.info("[XavierHub] meals scheduler stopped")
+                return
+            except Exception as e:
+                logger.warning(f"[XavierHub] meals scheduler error: {e}")
+
+    def _ensure_meals_task(self):
+        if not self._meals_enabled():
+            return
+        t = getattr(self, "_meals_task", None)
+        if t is not None and not t.done():
+            return
+        loop = self._main_loop
+        if loop is None:
+            return
+        try:
+            self._meals_task = loop.create_task(self._meals_scheduler())
+            logger.info("[XavierHub] meals task created")
+        except Exception as e:
+            logger.warning(f"[XavierHub] create meals task failed: {e}")
+
+    @filter.command("小回吃什么")
+    async def cmd_meals_show(self, event: AstrMessageEvent):
+        if not self._meals_enabled():
+            yield event.plain_result("三餐功能没开（插件配置里 meals_enabled）")
+            return
+        data = self._load_meals()
+        if not self._meals_is_today(data):
+            yield event.plain_result("今天还没生成，正在想…")
+            ok = await self._generate_daily_meals(force=True)
+            if not ok:
+                yield event.plain_result("生成失败，看下日志里 [XavierHub] meals")
+                return
+            data = self._load_meals()
+        meals = data.get("meals") or {}
+        label = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐"}
+        lines = [f"{data.get('date','')} 三餐"]
+        for k in ("breakfast", "lunch", "dinner"):
+            v = meals.get(k)
+            if not isinstance(v, dict):
+                continue
+            dishes = [str(x).strip() for x in (v.get("dishes") or []) if str(x).strip()]
+            if not dishes:
+                continue
+            row = f"{label[k]}：{'、'.join(dishes)}"
+            note = str(v.get("note") or "").strip()
+            if note:
+                row += f"（{note}）"
+            lines.append(row)
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("小回重新吃")
+    async def cmd_meals_regen(self, event: AstrMessageEvent):
+        if not self._meals_enabled():
+            yield event.plain_result("三餐功能没开（插件配置里 meals_enabled）")
+            return
+        ok = await self._generate_daily_meals(force=True)
+        yield event.plain_result("重新想好了，用 /小回吃什么 看" if ok else "生成失败，看日志")
 
     # ======== 前端可视化 ========
 
@@ -1007,6 +2240,7 @@ class XavierHubPlugin(Star):
         thoughts_state_path = self.thoughts_state_path
         thoughts_favorites_path = self.thoughts_favorites_path
         thoughts_notes_path = self.thoughts_notes_path
+        daily_meals_path = self.daily_meals_path
         phone_state_path = self.phone_state_path
         wakeup_alarms_path = self.wakeup_alarms_path
         ext_panel_enabled = bool(getattr(self, "ext_panel_enabled", False))
@@ -1024,6 +2258,8 @@ class XavierHubPlugin(Star):
         normalize_thoughts_fn = self._normalize_thoughts
         thought_keys_fn = self._get_thought_keys
         mood_key_fn = self._get_mood_key
+        io_lock = self._io_lock
+        write_json_file = self._write_json_file
 
         class HubHandler(BaseHTTPRequestHandler):
             def log_message(self, fmt, *args):
@@ -1055,6 +2291,26 @@ class XavierHubPlugin(Star):
                 self.send_header("Access-Control-Allow-Headers", "Content-Type")
                 self.end_headers()
 
+            def _run_api_locked(self, fn):
+                """数据接口在锁里执行，响应先攒着，出锁后再发，慢客户端不会一直占着锁。"""
+                captured = []
+
+                def _capture(code, body, content_type="text/html; charset=utf-8"):
+                    if not captured:
+                        captured.append((code, body, content_type))
+
+                self._send = _capture
+                try:
+                    with io_lock:
+                        fn()
+                finally:
+                    try:
+                        del self._send
+                    except AttributeError:
+                        pass
+                for code, body, content_type in captured:
+                    self._send(code, body, content_type)
+
             def _read_json(self, path: Path):
                 try:
                     if path and path.exists():
@@ -1064,6 +2320,12 @@ class XavierHubPlugin(Star):
                 return {}
 
             def do_GET(self):
+                if self.path.startswith("/api/"):
+                    self._run_api_locked(self._do_GET)
+                else:
+                    self._do_GET()
+
+            def _do_GET(self):
                 try:
                     if self.path.startswith("/api/thoughts/favorites"):
                         favs = load_favorites()
@@ -1094,12 +2356,12 @@ class XavierHubPlugin(Star):
                                 "history": []
                             }
                         data.setdefault("history", [])
-                        # 兼容旧字段名：念头/暗线/愿望/兔想要/兔心底 → 兔在想/兔悄悄/兔心愿
+                        data.pop("scope", None)
+                        data.pop("sess", None)
                         if isinstance(data.get("thoughts"), dict):
                             data["thoughts"] = normalize_thoughts_fn(data.get("thoughts"))
                         else:
                             data["thoughts"] = {k: "" for k in thought_keys_fn()}
-                        # 给 current + history 打上 id，并附上已收藏 id 列表
                         favs = load_favorites()
                         fav_ids = {str(x.get("id")) for x in favs if isinstance(x, dict) and x.get("id")}
                         cur_id = thought_item_id(data.get("updated_at"), data.get("thoughts") or {})
@@ -1110,18 +2372,20 @@ class XavierHubPlugin(Star):
                                 continue
                             tid = item.get("id") or thought_item_id(item.get("updated_at"), item.get("thoughts") or {})
                             ni = dict(item)
+                            ni.pop("scope", None)
+                            ni.pop("sess", None)
                             ni["id"] = tid
                             if isinstance(ni.get("thoughts"), dict):
                                 ni["thoughts"] = normalize_thoughts_fn(ni.get("thoughts"))
                             hist.append(ni)
-                        data["history"] = hist
+                        
+                        data["history"] = hist[:20]
+                        data["total_history_count"] = len(hist)
                         data["favorite_ids"] = list(fav_ids)
                         data["favorites_count"] = len(favs)
-                        # 单句话红心：{thought_id: [字段名...]} + sentences 列表
                         _ff_payload = load_field_favorites_payload()
                         data["field_favorites"] = _ff_payload.get("fields") or {}
                         data["field_sentences"] = _ff_payload.get("sentences") or []
-                        # 用户便签 map：id -> {text, fields, updated_at}
                         notes_map = load_notes() or {}
                         slim_notes = {}
                         for nid, nv in notes_map.items():
@@ -1159,7 +2423,6 @@ class XavierHubPlugin(Star):
                         return
 
                     if self.path.startswith("/api/phone"):
-                        # 扩展面板关闭时不读跨插件数据
                         if not ext_panel_enabled:
                             self._send(200, json.dumps({
                                 "active_push": None,
@@ -1173,7 +2436,6 @@ class XavierHubPlugin(Star):
                         if not data:
                             data = {"active_push": None, "history": [], "feed": []}
                         data["ext_panel_enabled"] = True
-                        # 兼容旧状态：没有 feed 时用 active+history 拼瀑布流
                         feed = data.get("feed")
                         if not isinstance(feed, list) or not feed:
                             feed = []
@@ -1199,11 +2461,9 @@ class XavierHubPlugin(Star):
                                     "push": p,
                                 })
                             data["feed"] = feed
-                        # ---- next-wake pill (独立字段，不塞进推送瀑布流) ----
                         try:
                             import time as _time
                             from datetime import datetime as _dt
-                            # 清掉历史里误塞进 feed 的 wakeup_alarm 大卡片
                             current_feed = data.get("feed") or []
                             current_feed = [
                                 x for x in current_feed
@@ -1223,7 +2483,6 @@ class XavierHubPlugin(Star):
                                 best_ts = None
                                 best_src = None
                                 for _umo, raw in wk.items():
-                                    # 兼容旧版 {umo: timestamp} 与 0.3.0 {umo: {target_ts,...}}
                                     if isinstance(raw, (int, float)):
                                         ts = float(raw)
                                         src = None
@@ -1253,6 +2512,11 @@ class XavierHubPlugin(Star):
                                     }
                         except Exception:
                             data["next_wake"] = None
+                        try:
+                            dm = self._read_json(daily_meals_path)
+                            data["daily_meals"] = dm if isinstance(dm, dict) else None
+                        except Exception:
+                            data["daily_meals"] = None
                         self._send(200, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
@@ -1264,11 +2528,10 @@ class XavierHubPlugin(Star):
                             "phone_push_dir": phone_state_path.parent.name,
                             "ext_panel_enabled": ext_panel_enabled,
                             "data_dir": str(data_dir),
-                            "version": "0.3.0",
+                            "version": PLUGIN_VERSION,
                         }, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
-                    # ===== PWA: manifest & icons =====
                     if self.path == "/manifest.json" or self.path.startswith("/manifest.json"):
                         mf = base_dir / "manifest.json"
                         if mf.exists():
@@ -1281,10 +2544,7 @@ class XavierHubPlugin(Star):
                         fp = base_dir / self.path.lstrip("/")
                         if fp.exists():
                             data_bytes = fp.read_bytes()
-                            if self.path.endswith(".svg"):
-                                ct = "image/svg+xml"
-                            else:
-                                ct = "image/png"
+                            ct = "image/svg+xml" if self.path.endswith(".svg") else "image/png"
                             self._send(200, data_bytes, ct)
                         else:
                             self._send(404, b"", "text/plain")
@@ -1300,6 +2560,9 @@ class XavierHubPlugin(Star):
                     self._send(500, json.dumps({"ok": 0, "error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8")
 
             def do_POST(self):
+                self._run_api_locked(self._do_POST)
+
+            def _do_POST(self):
                 try:
                     if self.path.startswith("/api/thoughts/favorite"):
                         raw = self._read_body()
@@ -1325,7 +2588,6 @@ class XavierHubPlugin(Star):
                                 favs.pop(idx)
                             favorited = False
                         else:
-                            # add / toggle-add
                             if idx >= 0:
                                 favs.pop(idx)
                             item = {
@@ -1336,7 +2598,6 @@ class XavierHubPlugin(Star):
                                     k: str(thoughts.get(k) or "") for k in thought_keys_fn()
                                 },
                             }
-                            # 若前端没传完整 thoughts，尝试从 state 补
                             if not any(item["thoughts"].values()):
                                 state = self._read_json(thoughts_state_path) or {}
                                 if str(state.get("updated_at")) == str(updated_at) or thought_item_id(state.get("updated_at"), state.get("thoughts") or {}) == tid:
@@ -1390,26 +2651,22 @@ class XavierHubPlugin(Star):
                             cur_set.add(field)
                             on = True
                         else:
-                            # toggle
                             if field in cur_set:
                                 cur_set.discard(field)
                                 on = False
                             else:
                                 cur_set.add(field)
                                 on = True
-                        # 字段映射
                         if cur_set:
                             fields_map[tid] = sorted(cur_set)
                         else:
                             fields_map.pop(tid, None)
 
-                        # 单句列表：on 时写入/更新一句；off 时移除
                         def _sent_key(s):
                             return (str(s.get("thought_id") or ""), str(s.get("field") or ""))
 
                         sentences = [s for s in sentences if isinstance(s, dict) and _sent_key(s) != (tid, field)]
                         if on:
-                            # 若前端没给 text，从 state/history 补
                             if not text_in:
                                 try:
                                     state = self._read_json(thoughts_state_path) or {}
@@ -1450,7 +2707,6 @@ class XavierHubPlugin(Star):
                         }, ensure_ascii=False), "application/json; charset=utf-8")
                         return
 
-                    # 从历史列表删除一条心声（永久，不碰当前实时 thoughts）
                     if self.path.startswith("/api/thoughts/history/delete"):
                         raw = self._read_body()
                         try:
@@ -1461,7 +2717,15 @@ class XavierHubPlugin(Star):
                         if not tid:
                             self._send(400, json.dumps({"ok": 0, "error": "missing id"}, ensure_ascii=False), "application/json; charset=utf-8")
                             return
-                        data = self._read_json(thoughts_state_path) or {}
+                        data = {}
+                        if thoughts_state_path.exists():
+                            try:
+                                data = json.loads(thoughts_state_path.read_text(encoding="utf-8"))
+                            except Exception as e:
+                                self._send(500, json.dumps({"ok": 0, "error": f"心声文件读取失败，未做修改: {e}"}, ensure_ascii=False), "application/json; charset=utf-8")
+                                return
+                        if not isinstance(data, dict):
+                            data = {}
                         history = data.get("history") or []
                         if not isinstance(history, list):
                             history = []
@@ -1470,14 +2734,10 @@ class XavierHubPlugin(Star):
                         removed = before - len(history)
                         data["history"] = history
                         try:
-                            thoughts_state_path.write_text(
-                                json.dumps(data, ensure_ascii=False, indent=2),
-                                encoding="utf-8",
-                            )
+                            write_json_file(thoughts_state_path, data)
                         except Exception as e:
                             self._send(500, json.dumps({"ok": 0, "error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8")
                             return
-                        # 顺带清掉该条在收藏/字段红心/便签里的残留（避免幽灵）
                         try:
                             favs = load_favorites()
                             if isinstance(favs, list):
@@ -1564,7 +2824,6 @@ class XavierHubPlugin(Star):
                                 }
                             return out
 
-                        # 补全 thoughts
                         if not any(str(thoughts.get(k) or "").strip() for k in thought_keys_fn()):
                             state = self._read_json(thoughts_state_path) or {}
                             cur = state.get("thoughts") or {}
@@ -1595,7 +2854,6 @@ class XavierHubPlugin(Star):
                                         "thoughts": thoughts_norm or (cur_note.get("thoughts") if isinstance(cur_note.get("thoughts"), dict) else {}),
                                     }
                             else:
-                                # 去掉整条感想；若还有字段贴纸则保留
                                 if cur_fields:
                                     notes[tid] = {
                                         "id": tid,
@@ -1615,7 +2873,7 @@ class XavierHubPlugin(Star):
                                 "notes": _slim_notes_map(notes),
                             }, ensure_ascii=False), "application/json; charset=utf-8")
                             return
-                        # set / update
+
                         if len(text_note) > 80:
                             text_note = text_note[:80]
                         if field:
@@ -1636,7 +2894,6 @@ class XavierHubPlugin(Star):
                                 "thoughts": thoughts_norm or (cur_note.get("thoughts") if isinstance(cur_note.get("thoughts"), dict) else {}),
                             }
                         save_notes(notes)
-                        # 伪装成用户私聊，让角色立刻看见
                         try:
                             notify_note_posted(tid, text_note, notes[tid].get("thoughts") or {}, field=field)
                         except Exception as _ne:
@@ -1667,6 +2924,16 @@ class XavierHubPlugin(Star):
 
     async def terminate(self):
         try:
+            _RunnerGuard.uninstall(self)
+        except Exception as e:
+            logger.warning(f"[XavierHub] uninstall guard failed: {e}")
+        try:
+            t = getattr(self, "_meals_task", None)
+            if t is not None and not t.done():
+                t.cancel()
+        except Exception:
+            pass
+        try:
             if self.httpd:
                 self.httpd.shutdown()
                 self.httpd.server_close()
@@ -1675,10 +2942,26 @@ class XavierHubPlugin(Star):
 
     @filter.command("xavier_hub_health")
     async def xavier_hub_health(self, event: AstrMessageEvent):
-        """检查 Xavier Hub 状态"""
         wl_status = f"已启用（{len(self.session_whitelist)}条规则）" if self.session_whitelist else "未限制"
+        try:
+            from astrbot.core.config.default import VERSION as ASTRBOT_VERSION
+        except Exception:
+            ASTRBOT_VERSION = "未知"
+        mode = self._get_history_mode()
+        mode_text = {
+            "last_n": f"last_n（每轮注入本对话最近 {self._get_history_n()} 轮）",
+            "none": "none（不进上下文，不注入）",
+            "all": "all（进上下文，不注入）",
+        }.get(mode, mode)
+        if self._guard_methods and not self._guard_error:
+            guard_text = "已生效（" + "、".join(self._guard_methods) + "）"
+        else:
+            guard_text = f"未生效：{self._guard_error or '未知原因'}"
         lines = [
-            f"Xavier Hub 状态",
+            f"Xavier Hub v{PLUGIN_VERSION} 状态",
+            f"AstrBot 版本: {ASTRBOT_VERSION}",
+            f"心声模式: {mode_text}",
+            f"上下文拦截: {guard_text}",
             f"数据目录: {getattr(self, 'data_dir', self.base_dir)}",
             f"心声 state 文件: {'✓' if self.thoughts_state_path.exists() else '✗'} ({self.thoughts_state_path.name})",
             f"phone_state 文件: {'✓' if self.phone_state_path.exists() else '✗'} ({self.phone_state_path.name})",
@@ -1688,17 +2971,20 @@ class XavierHubPlugin(Star):
         ]
         yield event.plain_result("\n".join(lines))
 
-    @filter.command("xavier_thoughts")
-    async def xavier_thoughts_cmd(self, event: AstrMessageEvent):
-        """查看当前心声快照"""
-        data = self._load_thoughts()
-        t = data.get("thoughts") or {}
-        line = "\n".join(f"{k}：{t.get(k, '')}" for k in (self._get_thought_keys() if hasattr(self, "_get_thought_keys") else THOUGHT_KEYS))
+    @filter.command("xt")
+    async def xt_cmd(self, event: AstrMessageEvent):
+        """查看当前会话最近的一条心声"""
+        sess = self._sess_key(str(getattr(event, "unified_msg_origin", "") or ""))
+        t = await asyncio.to_thread(self._latest_thought_for_sess, sess)
+        if not t:
+            yield event.plain_result("这个会话里还没有心声记录")
+            return
+        t = self._normalize_thoughts(t)
+        line = "\n".join(f"{k}：{t.get(k, '')}" for k in self._get_thought_keys())
         yield event.plain_result(line)
 
     @filter.command("xavier_notes")
     async def xavier_notes_cmd(self, event: AstrMessageEvent):
-        """查看贴在心声上的便签"""
         notes = self._load_notes()
         if not notes:
             yield event.plain_result("还没有便签")

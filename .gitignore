@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Backups
+*.bak*
+*.broken*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AstrBot runtime data
+thoughts_state.json
+thoughts_scopes.json
+thoughts_favorites.json
+thoughts_notes.json

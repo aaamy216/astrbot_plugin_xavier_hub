@@ -1,93 +1,139 @@
 {
-  "visualizer_host": {
-    "description": "前端服务监听地址",
-    "type": "string",
-    "default": "0.0.0.0",
-    "hint": "0.0.0.0 允许外网访问，127.0.0.1 仅本地访问",
-    "obvious_hint": true
-  },
-  "visualizer_port": {
-    "description": "前端服务端口",
-    "type": "int",
-    "default": 8765,
-    "hint": "修改后需要重启插件生效；请自行选择未占用端口"
-  },
-  "target_user_id": {
-    "description": "目标用户 ID（只对这个人启用心声）",
-    "type": "string",
-    "default": "",
-    "hint": "填「聊天对象」在当前平台的用户 ID，不是插件自己的编号。\n· QQ 私聊/群：一般就是对方的 QQ 号（一串数字）\n· 企微等其它平台：填该平台返回的用户 ID（不一定是 QQ 号）\n· 留空：对所有人生效（容易串数据，不推荐）\n保存后请重载插件。",
-    "obvious_hint": true
-  },
-  "visualizer_enabled": {
-    "description": "启用心声前端可视化服务",
-    "type": "bool",
-    "default": true
-  },
-  "ext_panel_enabled": {
-    "description": "启用扩展面板（手机页/跨插件数据）",
-    "type": "bool",
-    "default": false,
-    "hint": "关闭时：不显示「手机」页，也不读取手机推送/闹钟等其他插件数据。开启后才注入跨插件内容。默认关闭。",
-    "obvious_hint": true
-  },
-  "phone_push_dir": {
-    "description": "手机推送插件目录名",
-    "type": "string",
-    "default": "astrbot_plugin_phone_push_lite",
-    "hint": "相对 plugins/ 目录的文件夹名；仅在「扩展面板」开启时使用"
-  },
-  "session_whitelist": {
-    "description": "会话白名单（只在这些会话里生效）",
-    "type": "list",
-    "default": [],
-    "hint": "填入用 /sid 命令获取的会话 ID。\n留空 = 不限制会话（仍受「目标用户 ID」约束）。",
-    "obvious_hint": true
-  },
-  "thoughts_instruction": {
-    "description": "心声模板（注入给模型的强制指令）",
-    "type": "text",
-    "hint": "JSON 键名必须和「心声字段名」一致。改字段后请同步改这里，并重载插件。",
-    "obvious_hint": true,
-    "default": "[系统强制指令] 在你回复的最后，必须使用 <xavier_thoughts>...</xavier_thoughts> 标签输出你当前的内心活动。格式必须是严格的JSON：\n<xavier_thoughts>\n{\n  \"情绪\": \"一两个词或一句短话，当前心情底色。如 平静/开心/有点酸/认真/犯困/温柔\",\n  \"兔在想\": \"念头，当前对这句话的直接想法\",\n  \"兔悄悄\": \"潜意识想法或未说出口的话\",\n  \"兔心愿\": \"现在最想做的事或最期望发生的事\",\n  \"兔言兔语\": \"一个无厘头的可爱想法\"\n}\n</xavier_thoughts>\n注意：这个标签里的内容不会显示给用户，仅用于后台记录。必须包含这五个字段。"
-  },
-  "note_notify_enabled": {
-    "description": "便签贴上后伪装成用户消息通知小回",
-    "type": "bool",
-    "default": true,
-    "hint": "开启后，网页贴便签会立刻以私聊消息形式注入对话"
-  },
-  "note_notify_umo": {
-    "description": "便签通知注入的会话标识（UMO）",
-    "type": "string",
-    "default": "",
-    "hint": "UMO = Unified Message Origin，AstrBot 的「完整会话地址」，用来指定便签要注入到哪一段对话。\n格式一般是：平台名:消息类型:用户或群ID\n例：qq:FriendMessage:123456789（把 123456789 换成对方 QQ 号）\n· 第三段通常就是用户 ID / QQ 号\n· 留空：尽量用当前目标用户对应会话\n不会用可先空着，或从 AstrBot 日志/会话列表里抄完整会话串。",
-    "obvious_hint": true
-  },
-  "bot_qq_id": {
-    "description": "机器人 QQ 号（账号数字 ID）",
-    "type": "string",
-    "default": "",
-    "hint": "填「机器人自己的 QQ 号」（一串数字），用于便签伪装成私聊消息时标明发送方。\n· 一般可留空，插件会尝试自动识别\n· 自动识别失败再手动填写\n· 不是对方用户的 QQ，也不是 target_user_id",
-    "obvious_hint": true
-  },
-  "thought_fields": {
-    "type": "string",
-    "default": "情绪,兔在想,兔悄悄,兔心愿,兔言兔语",
-    "description": "心声字段名（逗号分隔，顺序=显示顺序）",
-    "hint": "改这里会同步到网页卡片标签。第一项默认当「情绪」气泡；也可用 thought_mood_field 指定。保存并重载插件后生效。",
-    "obvious_hint": true
-  },
-  "thought_mood_field": {
-    "type": "string",
-    "default": "情绪",
-    "description": "情绪气泡字段名",
-    "hint": "必须是上面字段列表中的一个；显示在「实时」旁的小气泡，不进下方大卡片。"
-  },
-  "thought_field_aliases": {
-    "type": "text",
-    "default": "兔在想=念头\n兔悄悄=兔心底,暗线\n兔心愿=兔想要,愿望\n兔言兔语=无厘头",
-    "description": "字段别名（兼容旧数据）",
-    "hint": "每行：新字段名=旧名1,旧名2。改字段名后把旧名写在右边，历史数据仍能显示。"
-  }
+    "visualizer_enabled": {
+        "description": "启用心声前端可视化服务",
+        "type": "bool",
+        "default": false
+    },
+    "visualizer_host": {
+        "description": "前端服务监听地址",
+        "type": "string",
+        "default": "0.0.0.0",
+        "hint": "0.0.0.0 允许外网访问，127.0.0.1 仅本地访问",
+        "obvious_hint": true
+    },
+    "visualizer_port": {
+        "description": "前端服务端口",
+        "type": "int",
+        "default": 8765,
+        "hint": "修改后需要重启插件生效；请自行选择未占用端口"
+    },
+    "target_user_id": {
+        "description": "目标用户 ID（只对这个人启用心声）",
+        "type": "string",
+        "default": "",
+        "hint": "填「聊天对象」在当前平台的用户 ID。QQ 私聊/群：一般就是用户的 QQ 号（一串数字）\n· 企微等其它平台：填该平台返回的用户 ID（不一定是 QQ 号）\n· 留空：对所有人生效。",
+        "obvious_hint": true
+    },
+    "session_whitelist": {
+        "description": "会话白名单（只在这些会话里生效）",
+        "type": "list",
+        "default": [],
+        "hint": "填入用 /sid 命令获取的会话 ID。\n留空 = 不限制会话（仍受「目标用户 ID」约束）。",
+        "obvious_hint": true
+    },
+    "thoughts_history_mode": {
+        "description": "心声历史保留模式",
+        "type": "string",
+        "options": ["last_n", "none", "all"],
+        "hint": "last_n：心声不进对话历史，每轮在系统提示词里补上当前对话最近 N 轮（推荐）\nnone：心声不进对话历史，也不注入\nall：心声留在对话历史里，不额外注入\n三种模式下网页都能看到心声，聊天框都看不到。\n从 all 切到另外两种时，旧对话里已经存下的心声不会被删，发一次 /new 就是干净的上下文。",
+        "default": "last_n"
+    },
+    "thoughts_history_n": {
+        "description": "最近心声注入轮数（last_n 模式生效）",
+        "type": "int",
+        "hint": "只注入当前会话、当前对话里的心声，私聊和群聊互不可见；/new、/reset 之后从头算。\n默认 3；设为 1 只回顾上一轮；0 表示不注入；最多 20。",
+        "default": 3
+    },
+    "thoughts_instruction": {
+        "description": "心声模板（注入给模型的强制指令）",
+        "type": "text",
+        "hint": "JSON 键名必须和「心声字段名」一致。改字段后请同步改这里。",
+        "obvious_hint": true,
+        "default": "[系统强制指令] 在你回复的最后，必须使用 <xt>...</xt> 标签输出你当前的内心活动。格式必须是严格的JSON，并且不要换行：\n<xt>{\"情绪\": \"词语，当前心情底色。\", \"兔在想\": \"当前对这句话的直接想法或闪过的念头\", \"兔悄悄\": \"藏在对话之下的暗线或悄悄做的事情\", \"兔心愿\": \"现在最想要的或最期望发生的\", \"无厘头\": \"一个无厘头的可爱想法\"}</xt> \n注意：这个标签里的内容不会显示给用户，仅用于后台记录。必须包含这五个字段。"
+    },
+    "thought_fields": {
+        "type": "string",
+        "default": "情绪,兔在想,兔悄悄,兔心愿,兔言兔语",
+        "description": "心声字段名（逗号分隔，顺序=显示顺序）",
+        "hint": "改这里会同步到网页卡片标签。第一项默认当「情绪」气泡；也可用 thought_mood_field 指定。一般不用改。",
+        "obvious_hint": true
+    },
+    "thought_mood_field": {
+        "type": "string",
+        "default": "情绪",
+        "description": "情绪气泡字段名",
+        "hint": "必须是上面字段列表中的一个；显示在「实时」旁的小气泡，不进下方大卡片。"
+    },
+    "thought_field_aliases": {
+        "type": "text",
+        "default": "兔在想=念头\n兔悄悄=兔心底,暗线\n兔心愿=兔想要,愿望\n兔言兔语=无厘头",
+        "description": "字段别名（兼容旧数据）",
+        "hint": "每行：新字段名=旧名1,旧名2。改字段名后把旧名写在右边，历史数据仍能显示。一般不用改"
+    },
+    "note_notify_enabled": {
+        "description": "便签贴上后伪装成用户消息通知小回",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，网页贴便签会立刻以私聊消息形式注入对话"
+    },
+    "note_notify_umo": {
+        "description": "便签通知注入的会话标识（UMO）",
+        "type": "string",
+        "default": "",
+        "hint": "填UMO会话id，用来指定便签要注入到哪一段对话。\n格式一般是：平台名:消息类型:用户号或群号\n例：qq:FriendMessage:123456789（把 123456789 换成对方 QQ 号）\n· 第三段通常就是用户 ID / QQ 号\n· 留空：尽量用当前目标用户对应会话。",
+        "obvious_hint": true
+    },
+    "bot_qq_id": {
+        "description": "机器人 QQ 号",
+        "type": "string",
+        "default": "",
+        "hint": "填「机器人自己的 QQ 号」，用于便签伪装成私聊消息时标明发送方。\n· 一般可留空，插件会尝试自动识别",
+        "obvious_hint": true
+    },
+    "note_notify_user_id": {
+        "description": "机器人回复目标 QQ 号",
+        "type": "string",
+        "hint": "在网页端贴便签时，机器人的回应会发给这个QQ号。(填你的QQ）。",
+        "default": ""
+    },
+    "ext_panel_enabled": {
+        "description": "启用扩展面板（手机页/跨插件数据）",
+        "type": "bool",
+        "default": false,
+        "hint": "关闭时：不显示「手机」页，也不读取手机推送/闹钟等其他插件数据。开启后才注入跨插件内容。默认关闭。",
+        "obvious_hint": true
+    },
+    "phone_push_dir": {
+        "description": "手机推送插件目录名",
+        "type": "string",
+        "default": "astrbot_plugin_phone_push_lite",
+        "hint": "相对 plugins/ 目录的文件夹名；仅在「扩展面板」开启时使用"
+    },
+    "meals_enabled": {
+        "description": "启用「一日三餐」生成（灵感参考）",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后每天到点用当前 LLM 生成小回今天的三餐，写入 daily_meals.json；生成后每轮对话注入 system（只作灵感参考，不是必须照吃）。\n手动：/小回吃什么 查看或补生成，/小回重新吃 强制重生成。",
+        "obvious_hint": true
+    },
+    "meals_gen_time": {
+        "description": "一日三餐生成时间（HH:MM，24小时制）",
+        "type": "string",
+        "default": "06:30",
+        "hint": "每天到这个时刻生成当天三餐。格式如 06:30 / 07:00 / 23:15。\n填错格式会回退到 06:30。当天已生成过不会重复生成。"
+    },
+    "meals_prompt": {
+        "description": "三餐生成提示词（可直接改）",
+        "type": "text",
+        "default": "你要为「沈星回」这个角色安排今天的一日三餐。有人希望他每天都吃得好、吃得香。\n要求：\n1. 三餐必须顿顿有滋味、看着就馋的。\n2. 他爱吃的有这些仅供参考：各种肉（羊排、红烧肉、牛腩、猪肋排、炸鸡、牛排、火锅）、有汤有水的面食（番茄鸡蛋面、老火汤面、萝卜牛肉汤、小面）、香口的主食（生煎包、肉夹馍、芝士焗饭、煲仔饭），可以有甜品（蛋挞、可可面包、芝士奶黄包、冰激凌、草莓、曲奇）。有时他自己做饭创新料理，以前做过辣椒炒蓝莓，酸奶油青瓜片，仅供参考不要照抄。\n3.  用简短好懂地道的中文菜名。每餐 2-3 样，搭配合理，不要重复。note在10字内简短描述味道，可留空.\n只输出 JSON，不要任何解释、不要代码块：\n{\"breakfast\":{\"dishes\":[\"...\"],\"note\":\"\"},\"lunch\":{\"dishes\":[\"...\"],\"note\":\"\"},\"dinner\":{\"dishes\":[\"...\"],\"note\":\"\"}}",
+        "hint": "喂给模型的要求，决定小回今天吃到什么。\n⚠ 结尾那段 JSON 格式要求必须保留，否则解析失败当天不会生成（日志：[XavierHub] meals: parse failed）。\n清空 = 回退内置默认。\n改完用 /小回重新吃 立刻试效果。",
+        "obvious_hint": true
+    },
+    "meals_inject_template": {
+        "description": "三餐注入模板（每轮对话发给小回的话）",
+        "type": "text",
+        "default": "【今天给你准备的三餐——只作灵感参考】\n{meals}\n（有人希望你今天吃得好、吃得香。这是个参考，不必完全照着这个吃。）",
+        "hint": "生成好的三餐每轮对话都会按这个模板注入 system。\n{meals} = 三餐正文占位（会替换成「早：… 午：… 晚：…」）；不写 {meals} 则三餐自动接在文本后面。\n这里决定他怎么看待这份菜单：是参考还是硬性执行。\n清空 = 回退内置默认。",
+        "obvious_hint": true
+    }
 }
