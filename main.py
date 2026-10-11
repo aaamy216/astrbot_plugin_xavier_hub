@@ -27,6 +27,7 @@ import weakref
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 from astrbot.api import logger
+from astrbot.api.web import request
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.api.provider import LLMResponse, ProviderRequest
@@ -605,6 +606,7 @@ class XavierHubPlugin(Star):
 
         if self.plugin_cfg.get("visualizer_enabled", False):
             self._start_visualizer()
+        self._register_dashboard_web_apis()
         logger.info(
             f"XavierHubPlugin v{PLUGIN_VERSION} loaded | ext_panel={'on' if self.ext_panel_enabled else 'off'}"
         )
@@ -2229,6 +2231,573 @@ class XavierHubPlugin(Star):
             return
         ok = await self._generate_daily_meals(force=True)
         yield event.plain_result("重新想好了，用 /小回吃什么 看" if ok else "生成失败，看日志")
+
+
+    # ======== 控制台内置 Web API 原生路由 ========
+
+    def _read_json_file(self, path: Path):
+        try:
+            if path and path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.debug(f"[XavierHub] read {path} failed: {e}")
+        return {}
+
+    async def api_get_thoughts(self):
+        with self._io_lock:
+            data = self._read_json_file(self.thoughts_state_path)
+            if not data or "thoughts" not in data:
+                data = {
+                    "updated_at": None,
+                    "thoughts": {k: "" for k in self._get_thought_keys()},
+                    "history": []
+                }
+            data.setdefault("history", [])
+            data.pop("scope", None)
+            data.pop("sess", None)
+            if isinstance(data.get("thoughts"), dict):
+                data["thoughts"] = self._normalize_thoughts(data.get("thoughts"))
+            else:
+                data["thoughts"] = {k: "" for k in self._get_thought_keys()}
+            favs = self._load_favorites()
+            fav_ids = {str(x.get("id")) for x in favs if isinstance(x, dict) and x.get("id")}
+            cur_id = self._thought_item_id(data.get("updated_at"), data.get("thoughts") or {})
+            data["current_id"] = cur_id
+            hist = []
+            for item in (data.get("history") or []):
+                if not isinstance(item, dict):
+                    continue
+                tid = item.get("id") or self._thought_item_id(item.get("updated_at"), item.get("thoughts") or {})
+                ni = dict(item)
+                ni.pop("scope", None)
+                ni.pop("sess", None)
+                ni["id"] = tid
+                if isinstance(ni.get("thoughts"), dict):
+                    ni["thoughts"] = self._normalize_thoughts(ni.get("thoughts"))
+                hist.append(ni)
+
+            data["history"] = hist[:20]
+            data["total_history_count"] = len(hist)
+            data["favorite_ids"] = list(fav_ids)
+            data["favorites_count"] = len(favs)
+            _ff_payload = self._load_field_favorites_payload()
+            data["field_favorites"] = _ff_payload.get("fields") or {}
+            data["field_sentences"] = _ff_payload.get("sentences") or []
+            notes_map = self._load_notes() or {}
+            slim_notes = {}
+            for nid, nv in notes_map.items():
+                if not isinstance(nv, dict):
+                    continue
+                txt = str(nv.get("text") or "").strip()
+                fields = {}
+                raw_fields = nv.get("fields") if isinstance(nv.get("fields"), dict) else {}
+                for fk, fv in raw_fields.items():
+                    if isinstance(fv, dict):
+                        ftxt = str(fv.get("text") or "").strip()
+                    else:
+                        ftxt = str(fv or "").strip()
+                    if ftxt:
+                        fields[str(fk)] = ftxt[:80]
+                if not txt and not fields:
+                    continue
+                slim_notes[str(nid)] = {
+                    "text": txt,
+                    "fields": fields,
+                    "updated_at": nv.get("updated_at"),
+                }
+            data["notes"] = slim_notes
+            try:
+                data["schema"] = self._thought_schema()
+                data["thought_keys"] = list(self._get_thought_keys())
+                data["mood_key"] = self._get_mood_key()
+            except Exception as _se:
+                data["schema"] = {"keys": list(DEFAULT_THOUGHT_KEYS), "mood_key": "情绪", "card_keys": list(DEFAULT_THOUGHT_KEYS[1:]), "meta": {}}
+                data["thought_keys"] = list(DEFAULT_THOUGHT_KEYS)
+                data["mood_key"] = "情绪"
+                data["schema_error"] = str(_se)
+            data["ext_panel_enabled"] = bool(getattr(self, "ext_panel_enabled", False))
+            return data
+
+    async def api_get_favorites(self):
+        with self._io_lock:
+            favs = self._load_favorites()
+            sents = self._load_field_sentences()
+            return {
+                "favorites": favs,
+                "count": len(favs),
+                "sentences": sents,
+                "sentence_count": len(sents),
+                "total_count": len(favs) + len(sents),
+            }
+
+    async def api_get_field_favorites(self):
+        with self._io_lock:
+            payload = self._load_field_favorites_payload()
+            return {
+                "fields": payload.get("fields") or {},
+                "sentences": payload.get("sentences") or [],
+            }
+
+    async def api_get_phone(self):
+        with self._io_lock:
+            ext_panel_enabled = bool(getattr(self, "ext_panel_enabled", False))
+            if not ext_panel_enabled:
+                return {
+                    "active_push": None,
+                    "history": [],
+                    "feed": [],
+                    "next_wake": None,
+                    "ext_panel_enabled": False,
+                }
+            data = self._read_json_file(self.phone_state_path)
+            if not data:
+                data = {"active_push": None, "history": [], "feed": []}
+            data["ext_panel_enabled"] = True
+            feed = data.get("feed")
+            if not isinstance(feed, list) or not feed:
+                feed = []
+                seen = set()
+                ap = data.get("active_push")
+                if isinstance(ap, dict) and ap:
+                    key = f"{ap.get('type')}|{ap.get('source')}|{ap.get('title')}|{ap.get('updated_at')}"
+                    seen.add(key)
+                    feed.append({"pushed_at": ap.get("updated_at"), "reason": "active", "push": ap})
+                for x in (data.get("history") or []):
+                    if not isinstance(x, dict):
+                        continue
+                    p = x.get("push") if isinstance(x.get("push"), dict) else None
+                    if not p:
+                        continue
+                    key = f"{p.get('type')}|{p.get('source')}|{p.get('title')}|{p.get('updated_at')}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    feed.append({
+                        "pushed_at": x.get("archived_at") or p.get("updated_at"),
+                        "reason": x.get("reason") or "history",
+                        "push": p,
+                    })
+                data["feed"] = feed
+            try:
+                import time as _time
+                from datetime import datetime as _dt
+                current_feed = data.get("feed") or []
+                current_feed = [
+                    x for x in current_feed
+                    if not (
+                        isinstance(x, dict)
+                        and isinstance(x.get("push"), dict)
+                        and x["push"].get("type") == "alarm"
+                        and x.get("reason") == "wakeup_alarm"
+                    )
+                ]
+                data["feed"] = current_feed
+
+                data["next_wake"] = None
+                wk = self._read_json_file(self.wakeup_alarms_path)
+                if isinstance(wk, dict) and wk:
+                    now_ts = _time.time()
+                    best_ts = None
+                    best_src = None
+                    for _umo, raw in wk.items():
+                        if isinstance(raw, (int, float)):
+                            ts = float(raw)
+                            src = None
+                        elif isinstance(raw, dict):
+                            try:
+                                ts = float(raw.get("target_ts") or 0)
+                            except Exception:
+                                continue
+                            src = raw.get("source")
+                        else:
+                            continue
+                        if ts > now_ts:
+                            if best_ts is None or ts < best_ts:
+                                best_ts = ts
+                                best_src = src
+                    if best_ts is not None:
+                        diff_min = max(1, int((best_ts - now_ts) / 60 + 0.5))
+                        target_time = _dt.fromtimestamp(best_ts).strftime("%H:%M")
+                        data["next_wake"] = {
+                            "label": "星星睡醒了",
+                            "minutes": diff_min,
+                            "time": target_time,
+                            "subtitle": f"约 {diff_min} 分钟后 · {target_time}",
+                            "wake_at": best_ts,
+                            "source": best_src,
+                            "updated_at": int(now_ts * 1000),
+                        }
+            except Exception:
+                data["next_wake"] = None
+            try:
+                dm = self._read_json_file(self.daily_meals_path)
+                data["daily_meals"] = dm if isinstance(dm, dict) else None
+            except Exception:
+                data["daily_meals"] = None
+            return data
+
+    async def api_get_health(self):
+        ext_panel_enabled = bool(getattr(self, "ext_panel_enabled", False))
+        return {
+            "ok": 1,
+            "thoughts_state_exists": self.thoughts_state_path.exists(),
+            "phone_state_exists": self.phone_state_path.exists() if ext_panel_enabled else False,
+            "phone_push_dir": self.phone_state_path.parent.name,
+            "ext_panel_enabled": ext_panel_enabled,
+            "data_dir": str(getattr(self, "data_dir", self.base_dir)),
+            "version": PLUGIN_VERSION,
+        }
+
+    async def api_post_favorite(self):
+        with self._io_lock:
+            try:
+                body = await request.json(default={})
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            action = str(body.get("action") or "toggle").strip().lower()
+            tid = str(body.get("id") or "").strip()
+            thoughts = body.get("thoughts") if isinstance(body.get("thoughts"), dict) else {}
+            updated_at = body.get("updated_at")
+            if not tid:
+                tid = self._thought_item_id(updated_at, thoughts)
+            if not tid:
+                return {"ok": 0, "error": "missing id"}
+
+            favs = self._load_favorites()
+            idx = next((i for i, x in enumerate(favs) if isinstance(x, dict) and str(x.get("id")) == tid), -1)
+            favorited = False
+            if action == "remove" or (action == "toggle" and idx >= 0):
+                if idx >= 0:
+                    favs.pop(idx)
+                favorited = False
+            else:
+                if idx >= 0:
+                    favs.pop(idx)
+                item = {
+                    "id": tid,
+                    "updated_at": updated_at,
+                    "favorited_at": int(time.time() * 1000),
+                    "thoughts": {
+                        k: str(thoughts.get(k) or "") for k in self._get_thought_keys()
+                    },
+                }
+                if not any(item["thoughts"].values()):
+                    state = self._read_json_file(self.thoughts_state_path) or {}
+                    if str(state.get("updated_at")) == str(updated_at) or self._thought_item_id(state.get("updated_at"), state.get("thoughts") or {}) == tid:
+                        item["thoughts"] = state.get("thoughts") or item["thoughts"]
+                        item["updated_at"] = state.get("updated_at")
+                    else:
+                        for h in (state.get("history") or []):
+                            if not isinstance(h, dict):
+                                continue
+                            hid = h.get("id") or self._thought_item_id(h.get("updated_at"), h.get("thoughts") or {})
+                            if str(hid) == tid:
+                                item["thoughts"] = h.get("thoughts") or item["thoughts"]
+                                item["updated_at"] = h.get("updated_at")
+                                break
+                favs.insert(0, item)
+                favorited = True
+
+            self._save_favorites(favs)
+            return {
+                "ok": 1,
+                "id": tid,
+                "favorited": favorited,
+                "count": len(favs),
+                "favorites": favs,
+            }
+
+    async def api_post_field_favorite(self):
+        with self._io_lock:
+            try:
+                body = await request.json(default={})
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            tid = str(body.get("id") or "").strip()
+            field = str(body.get("field") or "").strip()
+            action = str(body.get("action") or "toggle").strip().lower()
+            text_in = str(body.get("text") or "").strip()
+            source_updated_at = body.get("source_updated_at") or body.get("updated_at")
+            if not tid or not field:
+                return {"ok": 0, "error": "missing id or field"}
+            payload = self._load_field_favorites_payload()
+            fields_map = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            sentences = payload.get("sentences") if isinstance(payload.get("sentences"), list) else []
+            cur_set = set(fields_map.get(tid) or [])
+            on = False
+            if action == "remove":
+                cur_set.discard(field)
+                on = False
+            elif action == "add":
+                cur_set.add(field)
+                on = True
+            else:
+                if field in cur_set:
+                    cur_set.discard(field)
+                    on = False
+                else:
+                    cur_set.add(field)
+                    on = True
+            if cur_set:
+                fields_map[tid] = sorted(cur_set)
+            else:
+                fields_map.pop(tid, None)
+
+            def _sent_key(s):
+                return (str(s.get("thought_id") or ""), str(s.get("field") or ""))
+
+            sentences = [s for s in sentences if isinstance(s, dict) and _sent_key(s) != (tid, field)]
+            if on:
+                if not text_in:
+                    try:
+                        state = self._read_json_file(self.thoughts_state_path) or {}
+                        cur_t = state.get("thoughts") if isinstance(state.get("thoughts"), dict) else {}
+                        cur_id = self._thought_item_id(state.get("updated_at"), cur_t)
+                        if str(cur_id) == tid:
+                            text_in = str(cur_t.get(field) or "").strip()
+                            source_updated_at = source_updated_at or state.get("updated_at")
+                        if not text_in:
+                            for h in (state.get("history") or []):
+                                if not isinstance(h, dict):
+                                    continue
+                                ht = h.get("thoughts") if isinstance(h.get("thoughts"), dict) else {}
+                                hid = h.get("id") or self._thought_item_id(h.get("updated_at"), ht)
+                                if str(hid) == tid:
+                                    text_in = str(ht.get(field) or "").strip()
+                                    source_updated_at = source_updated_at or h.get("updated_at")
+                                    break
+                    except Exception:
+                        pass
+                sentences.insert(0, {
+                    "thought_id": tid,
+                    "field": field,
+                    "text": text_in[:500],
+                    "favorited_at": int(time.time() * 1000),
+                    "source_updated_at": source_updated_at,
+                })
+
+            self._save_field_favorites(fields_map, sentences)
+            return {
+                "ok": 1,
+                "id": tid,
+                "field": field,
+                "on": on,
+                "text": text_in if on else "",
+                "fields": fields_map,
+                "sentences": sentences,
+            }
+
+    async def api_post_history_delete(self):
+        with self._io_lock:
+            try:
+                body = await request.json(default={})
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            tid = str(body.get("id") or "").strip()
+            if not tid:
+                return {"ok": 0, "error": "missing id"}
+            data = {}
+            if self.thoughts_state_path.exists():
+                try:
+                    data = json.loads(self.thoughts_state_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    return {"ok": 0, "error": f"心声文件读取失败，未做修改: {e}"}
+            if not isinstance(data, dict):
+                data = {}
+            history = data.get("history") or []
+            if not isinstance(history, list):
+                history = []
+            before = len(history)
+            history = [h for h in history if str((h or {}).get("id") or "") != tid]
+            removed = before - len(history)
+            data["history"] = history
+            try:
+                self._write_json_file(self.thoughts_state_path, data)
+            except Exception as e:
+                return {"ok": 0, "error": str(e)}
+            try:
+                favs = self._load_favorites()
+                if isinstance(favs, list):
+                    favs2 = [f for f in favs if str((f or {}).get("id") or "") != tid]
+                    if len(favs2) != len(favs):
+                        self._save_favorites(favs2)
+            except Exception:
+                pass
+            try:
+                payload = self._load_field_favorites_payload()
+                ff = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+                sents = payload.get("sentences") if isinstance(payload.get("sentences"), list) else []
+                changed = False
+                if tid in ff:
+                    ff.pop(tid, None)
+                    changed = True
+                sents2 = [s for s in sents if str((s or {}).get("thought_id") or "") != tid]
+                if len(sents2) != len(sents):
+                    changed = True
+                if changed:
+                    self._save_field_favorites(ff, sents2)
+            except Exception:
+                pass
+            try:
+                notes = self._load_notes() or {}
+                if isinstance(notes, dict) and tid in notes:
+                    notes.pop(tid, None)
+                    self._save_notes(notes)
+            except Exception:
+                pass
+            return {
+                "ok": 1,
+                "id": tid,
+                "removed": removed,
+                "history_count": len(history),
+            }
+
+    async def api_post_note(self):
+        with self._io_lock:
+            try:
+                body = await request.json(default={})
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            action = str(body.get("action") or "set").strip().lower()
+            tid = str(body.get("id") or "").strip()
+            text_note = str(body.get("text") or "").strip()
+            field = str(body.get("field") or "").strip()
+            thoughts = body.get("thoughts") if isinstance(body.get("thoughts"), dict) else {}
+            if not tid:
+                return {"ok": 0, "error": "missing id"}
+            notes = self._load_notes() or {}
+            cur_note = notes.get(tid) if isinstance(notes.get(tid), dict) else {"id": tid, "text": "", "fields": {}, "thoughts": {}}
+            cur_fields = {}
+            raw_fields = cur_note.get("fields") if isinstance(cur_note.get("fields"), dict) else {}
+            for fk, fv in raw_fields.items():
+                if isinstance(fv, dict):
+                    ftxt = str(fv.get("text") or "").strip()
+                else:
+                    ftxt = str(fv or "").strip()
+                if ftxt:
+                    cur_fields[str(fk)] = ftxt[:80]
+            cur_text = str(cur_note.get("text") or "").strip()
+
+            if not any(str(thoughts.get(k) or "").strip() for k in self._get_thought_keys()):
+                state = self._read_json_file(self.thoughts_state_path) or {}
+                cur = state.get("thoughts") or {}
+                cur_id = self._thought_item_id(state.get("updated_at"), cur)
+                if str(cur_id) == tid:
+                    thoughts = cur
+                else:
+                    for h in (state.get("history") or []):
+                        if not isinstance(h, dict):
+                            continue
+                        hid = h.get("id") or self._thought_item_id(h.get("updated_at"), h.get("thoughts") or {})
+                        if str(hid) == tid:
+                            thoughts = h.get("thoughts") or {}
+                            break
+            thoughts_norm = self._normalize_thoughts(thoughts) if isinstance(thoughts, dict) else {}
+
+            if action in ("remove", "delete", "clear") or (action == "set" and not text_note):
+                if field:
+                    cur_fields.pop(field, None)
+                    if not cur_text and not cur_fields:
+                        notes.pop(tid, None)
+                    else:
+                        notes[tid] = {
+                            "id": tid,
+                            "text": cur_text,
+                            "fields": cur_fields,
+                            "updated_at": int(time.time() * 1000),
+                            "thoughts": thoughts_norm or cur_note.get("thoughts") or {},
+                        }
+                else:
+                    notes.pop(tid, None)
+            else:
+                now_ms = int(time.time() * 1000)
+                if field:
+                    cur_fields[field] = text_note[:80]
+                    notes[tid] = {
+                        "id": tid,
+                        "text": cur_text,
+                        "fields": cur_fields,
+                        "updated_at": now_ms,
+                        "thoughts": thoughts_norm or cur_note.get("thoughts") or {},
+                    }
+                else:
+                    notes[tid] = {
+                        "id": tid,
+                        "text": text_note[:200],
+                        "fields": cur_fields,
+                        "updated_at": now_ms,
+                        "thoughts": thoughts_norm or cur_note.get("thoughts") or {},
+                    }
+            self._save_notes(notes)
+
+            # 贴便签通知注入
+            if action == "set" and text_note:
+                try:
+                    self.notify_note_posted(tid, text_note, field, thoughts_norm or cur_note.get("thoughts") or {})
+                except Exception as ne:
+                    logger.warning(f"[XavierHub] notify note failed: {ne}")
+
+            def _slim_notes_map(src):
+                out = {}
+                for k, v in (src or {}).items():
+                    if not isinstance(v, dict):
+                        continue
+                    f2 = {}
+                    rf = v.get("fields") if isinstance(v.get("fields"), dict) else {}
+                    for fk2, fv2 in rf.items():
+                        if isinstance(fv2, dict):
+                            t2 = str(fv2.get("text") or "").strip()
+                        else:
+                            t2 = str(fv2 or "").strip()
+                        if t2:
+                            f2[str(fk2)] = t2[:80]
+                    out[k] = {
+                        "text": str(v.get("text") or "").strip(),
+                        "fields": f2,
+                        "updated_at": v.get("updated_at"),
+                    }
+                return out
+
+            return {
+                "ok": 1,
+                "id": tid,
+                "field": field or None,
+                "text": text_note,
+                "action": action,
+                "note": notes.get(tid),
+                "notes": _slim_notes_map(notes),
+            }
+
+    def _register_dashboard_web_apis(self):
+        """向 AstrBot 注册控制台内置原生 Web API 路由，供仪表盘心声面板免端口调用。"""
+        routes = [
+            ("thoughts", self.api_get_thoughts, ["GET"], "获取最新心声与历史"),
+            ("thoughts/favorites", self.api_get_favorites, ["GET"], "获取收藏列表"),
+            ("thoughts/field-favorites", self.api_get_field_favorites, ["GET"], "获取单句收藏"),
+            ("phone", self.api_get_phone, ["GET"], "获取手机扩展面板数据"),
+            ("health", self.api_get_health, ["GET"], "插件健康检查"),
+            ("thoughts/favorite", self.api_post_favorite, ["POST"], "收藏或取消整条心声"),
+            ("thoughts/field-favorite", self.api_post_field_favorite, ["POST"], "收藏或取消单句心声"),
+            ("thoughts/note", self.api_post_note, ["POST"], "添加或修改心声便签"),
+            ("thoughts/history/delete", self.api_post_history_delete, ["POST"], "删除单条心声历史"),
+        ]
+        prefixes = ["Xavier_Hub", "astrbot_plugin_xavier_hub"]
+        for prefix in prefixes:
+            for ep, handler, methods, desc in routes:
+                try:
+                    self.context.register_web_api(f"/{prefix}/{ep}", handler, methods, f"{desc} ({prefix})")
+                    self.context.register_web_api(f"/{prefix}/api/{ep}", handler, methods, f"{desc} ({prefix} api)")
+                except Exception as e:
+                    logger.warning(f"[XavierHub] register_web_api /{prefix}/{ep} failed: {e}")
+        logger.info("[XavierHub] 控制台原生 Web API 路由已全部挂载就绪")
 
     # ======== 前端可视化 ========
 
