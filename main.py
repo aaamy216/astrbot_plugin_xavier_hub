@@ -2235,14 +2235,6 @@ class XavierHubPlugin(Star):
 
     # ======== 控制台内置 Web API 原生路由 ========
 
-    def _read_json_file(self, path: Path):
-        try:
-            if path and path.exists():
-                return json.loads(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.debug(f"[XavierHub] read {path} failed: {e}")
-        return {}
-
     async def api_get_thoughts(self):
         with self._io_lock:
             data = self._read_json_file(self.thoughts_state_path)
